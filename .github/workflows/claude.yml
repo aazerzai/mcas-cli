@@ -30,6 +30,13 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Checkout MCAS reference repository
+        uses: actions/checkout@v4
+        with:
+          repository: robbrad/ha-mychildatschool-mcas
+          path: reference/ha-mychildatschool-mcas
+          fetch-depth: 1
+
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
