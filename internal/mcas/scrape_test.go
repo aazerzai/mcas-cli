@@ -1,0 +1,189 @@
+package mcas
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// Fixture HTML fragments mirror tests/conftest.py in the reference
+// ha-mychildatschool-mcas repo (fabricated values, no real pupil data).
+const loginHTML = `
+<html><body><form method="post" action="./MCSParentLogin">
+  <input type="hidden" name="__VIEWSTATE" value="abc123" />
+  <input type="hidden" name="__VIEWSTATEGENERATOR" value="F50534A4" />
+  <input type="hidden" name="__EVENTVALIDATION" value="xyz789" />
+  <input name="EmailTextBox" type="text" />
+  <input name="PasswordTextBox" type="password" />
+</form></body></html>
+`
+
+const dashboardHTML = `
+<html><body>
+  <span id="ctl00_StudentNameLabel">Smith, Alex</span>
+  <script>
+    var master_studentid = 99999;
+    var master_userid = 12345;
+    var master_schoolID = "88888";
+    var master_schoolName = "Example High School";
+  </script>
+</body></html>
+`
+
+const behaviourHTML = `
+<table class='table'><thead><tr>
+  <th>Date</th><th>Class</th><th>Subject</th><th>Teacher</th><th>Comment</th><th>Event</th>
+</tr></thead><tbody>
+  <tr><td>11/09/2026</td><td>7x/Mu1</td><td>Music</td><td>Mr Example</td>
+      <td>Bulk event</td>
+      <td>Lesson Mark 1: Above Expected Attitude and Behaviour</td></tr>
+  <tr><td>11/09/2026</td><td>7ZZ</td><td>Tutor Period</td><td>Ms Example</td>
+      <td>Bulk event</td>
+      <td>Lesson Mark 2: Expected Attitude and Behaviour</td></tr>
+</tbody></table>
+`
+
+const timetableHTML = `
+<html><body><table>
+  <tr><th>Monday14th Sep</th><th>Tuesday15th Sep</th></tr>
+  <tr>
+    <td><div>Tutor</div><div title="Example High School">Example Hig...</div>
+        <div title="Tutor Period">Tutor Period</div><div title="7ZZ">7ZZ</div>
+        <div title="Ms Example">Ms Example</div></td>
+    <td><div>Tutor</div><div title="Example High School">Example Hig...</div>
+        <div title="Tutor Period">Tutor Period</div><div title="7ZZ">7ZZ</div>
+        <div title="Ms Example">Ms Example</div></td>
+  </tr>
+  <tr>
+    <td><div>1</div><div title="Example High School">Example Hig...</div>
+        <div title="Rel. Stud.">Rel. Stud.</div><div title="7y/Re1">7y/Re1</div>
+        <div title="Miss Example">Miss Example</div></td>
+    <td><div>1</div><div title="Example High School">Example Hig...</div>
+        <div title="Drama">Drama</div><div title="7y/Dr1">7y/Dr1</div>
+        <div title="Mr Example">Mr Example</div></td>
+  </tr>
+</table></body></html>
+`
+
+func TestHiddenFields(t *testing.T) {
+	fields := hiddenFields(loginHTML)
+	if fields["__VIEWSTATE"] != "abc123" {
+		t.Errorf("__VIEWSTATE = %q, want abc123", fields["__VIEWSTATE"])
+	}
+	if fields["__EVENTVALIDATION"] != "xyz789" {
+		t.Errorf("__EVENTVALIDATION = %q, want xyz789", fields["__EVENTVALIDATION"])
+	}
+	if _, ok := fields["EmailTextBox"]; ok {
+		t.Errorf("EmailTextBox should not be scraped as a hidden field")
+	}
+}
+
+func TestReadDashboardContext(t *testing.T) {
+	ctx := readDashboardContext(dashboardHTML)
+	if ctx.StudentID != 99999 {
+		t.Errorf("StudentID = %d, want 99999", ctx.StudentID)
+	}
+	if ctx.SchoolID != 88888 {
+		t.Errorf("SchoolID = %d, want 88888", ctx.SchoolID)
+	}
+	if ctx.SchoolName != "Example High School" {
+		t.Errorf("SchoolName = %q, want Example High School", ctx.SchoolName)
+	}
+	if ctx.StudentName != "Alex Smith" {
+		t.Errorf("StudentName = %q, want Alex Smith (Surname, Forename reordered)", ctx.StudentName)
+	}
+}
+
+func TestParseBehaviourHTML(t *testing.T) {
+	events := parseBehaviourHTML(behaviourHTML)
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2", len(events))
+	}
+	if events[0]["Subject"] != "Music" {
+		t.Errorf("Subject = %q, want Music", events[0]["Subject"])
+	}
+	if got := events[0]["Event"]; got == "" || !strings.Contains(got, "Lesson Mark 1") {
+		t.Errorf("Event = %q, want it to contain 'Lesson Mark 1'", got)
+	}
+}
+
+func TestParseBehaviourHTMLHandlesJunk(t *testing.T) {
+	for _, v := range []string{"", "<table></table>"} {
+		if got := parseBehaviourHTML(v); len(got) != 0 {
+			t.Errorf("parseBehaviourHTML(%q) = %v, want empty", v, got)
+		}
+	}
+}
+
+func TestParseTimetableHTML(t *testing.T) {
+	today := time.Date(2026, time.September, 10, 0, 0, 0, 0, time.UTC)
+	lessons := parseTimetableHTML(timetableHTML, today)
+	if len(lessons) != 4 {
+		t.Fatalf("got %d lessons, want 4", len(lessons))
+	}
+	var tutor []Lesson
+	for _, l := range lessons {
+		if l.Period == "Tutor" {
+			tutor = append(tutor, l)
+		}
+	}
+	if len(tutor) == 0 {
+		t.Fatal("no Tutor period lessons found")
+	}
+	if tutor[0].Subject != "Tutor Period" {
+		t.Errorf("Subject = %q, want Tutor Period", tutor[0].Subject)
+	}
+	if tutor[0].Teacher != "Ms Example" {
+		t.Errorf("Teacher = %q, want Ms Example", tutor[0].Teacher)
+	}
+	if tutor[0].Day != "Monday" {
+		t.Errorf("Day = %q, want Monday", tutor[0].Day)
+	}
+
+	subjects := map[string]bool{}
+	for _, l := range lessons {
+		subjects[l.Subject] = true
+	}
+	for _, want := range []string{"Tutor Period", "Rel. Stud.", "Drama"} {
+		if !subjects[want] {
+			t.Errorf("missing lesson subject %q in %v", want, subjects)
+		}
+	}
+}
+
+func TestParseDayHeader(t *testing.T) {
+	today := time.Date(2026, time.September, 10, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		header  string
+		wantDay string
+	}{
+		{"Monday14th Sep", "Monday"},
+		{"Friday1st Nov", "Friday"},
+		{"nonsense", "nonsense"},
+	}
+	for _, tt := range tests {
+		day, _ := parseDayHeader(tt.header, today)
+		if day != tt.wantDay {
+			t.Errorf("parseDayHeader(%q) day = %q, want %q", tt.header, day, tt.wantDay)
+		}
+	}
+}
+
+func TestParseDinnerBalance(t *testing.T) {
+	tests := []struct {
+		html string
+		want float64
+		ok   bool
+	}{
+		{"<span>Credit Balance Summary : £ 12.34</span>", 12.34, true},
+		{"<span>£ -5.00</span>", -5.0, true},
+		{"<span>£ 1,234.56</span>", 1234.56, true},
+		{"<span>no balance published</span>", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := parseDinnerBalance(tt.html)
+		if ok != tt.ok || (ok && got != tt.want) {
+			t.Errorf("parseDinnerBalance(%q) = (%v, %v), want (%v, %v)", tt.html, got, ok, tt.want, tt.ok)
+		}
+	}
+}
