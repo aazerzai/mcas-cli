@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +25,153 @@ func TestSanitizeFileNameStripsPathSeparators(t *testing.T) {
 		if got := sanitizeFileName(tt.in); got != tt.want {
 			t.Errorf("sanitizeFileName(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// chdir switches the working directory to dir for the duration of the test,
+// restoring it afterwards. A plain t.TempDir/os.Chdir pair without this
+// wouldn't be safe to reuse across subtests since t.Cleanup runs in LIFO
+// order regardless of nesting, but each call here is scoped to its own test.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir(%q) error = %v", dir, err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(old); err != nil {
+			t.Fatalf("restoring Chdir(%q) error = %v", old, err)
+		}
+	})
+}
+
+func TestResolveAttachmentPathDefaultsToCurrentDirectory(t *testing.T) {
+	chdir(t, t.TempDir())
+
+	got, err := resolveAttachmentPath("", "letter.pdf")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	wd, _ := os.Getwd()
+	want := filepath.Join(wd, "letter.pdf")
+	if got != want {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("resolveAttachmentPath() didn't create %q: %v", got, err)
+	}
+}
+
+func TestResolveAttachmentPathOutExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	got, err := resolveAttachmentPath(dir, "letter.pdf")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	want := filepath.Join(dir, "letter.pdf")
+	if got != want {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAttachmentPathOutExactFile(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "nested", "note.pdf")
+	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(out, []byte("old"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := resolveAttachmentPath(out, "ignored-name.pdf")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	if got != out {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, out)
+	}
+}
+
+func TestResolveAttachmentPathOutExactFileMissingParentDir(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "new-subdir", "note.pdf")
+
+	got, err := resolveAttachmentPath(out, "ignored-name.pdf")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	if got != out {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, out)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("resolveAttachmentPath() didn't create %q: %v", got, err)
+	}
+}
+
+func TestResolveAttachmentPathDeduplicatesOnCollision(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "letter.pdf"), []byte("first"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "letter (1).pdf"), []byte("second"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := resolveAttachmentPath(dir, "letter.pdf")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	want := filepath.Join(dir, "letter (2).pdf")
+	if got != want {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, want)
+	}
+
+	first, err := os.ReadFile(filepath.Join(dir, "letter.pdf"))
+	if err != nil || string(first) != "first" {
+		t.Errorf("original letter.pdf was modified: content=%q err=%v", first, err)
+	}
+}
+
+func TestResolveAttachmentPathDeduplicatesNameWithoutExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README"), []byte("first"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := resolveAttachmentPath(dir, "README")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	want := filepath.Join(dir, "README (1)")
+	if got != want {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveAttachmentPathSanitizesHostileFileName(t *testing.T) {
+	dir := t.TempDir()
+
+	got, err := resolveAttachmentPath(dir, "../../evil.pdf")
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	want := filepath.Join(dir, "evil.pdf")
+	if got != want {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, want)
+	}
+
+	got, err = resolveAttachmentPath(dir, `a\b.pdf`)
+	if err != nil {
+		t.Fatalf("resolveAttachmentPath() error = %v", err)
+	}
+	want = filepath.Join(dir, "b.pdf")
+	if got != want {
+		t.Errorf("resolveAttachmentPath() = %q, want %q", got, want)
 	}
 }
 

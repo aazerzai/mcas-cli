@@ -51,7 +51,7 @@ func init() {
 	messagesCmd.Flags().IntVar(&messagesFrom, "from", 0, "only messages from this recipient id")
 	messagesCmd.Flags().BoolVar(&messagesUnread, "unread", false, "only unread messages")
 	messagesCmd.Flags().StringVar(&messagesSince, "since", "", "only messages on or after this date, YYYY-MM-DD (local time)")
-	messagesAttachmentCmd.Flags().StringVarP(&messagesAttachmentOut, "out", "o", "", "file path to save the attachment to (default: under the cache directory)")
+	messagesAttachmentCmd.Flags().StringVarP(&messagesAttachmentOut, "out", "o", "", "file or directory to save the attachment to (default: current directory)")
 	messagesCmd.AddCommand(messagesAttachmentCmd)
 	rootCmd.AddCommand(messagesCmd)
 }
@@ -234,30 +234,21 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 		return emitFailure(format, "messages attachment", output.APIErrorType, err)
 	}
 
-	destPath := messagesAttachmentOut
-	if destPath == "" {
-		destPath = filepath.Join(cacheDir, "attachments", strconv.Itoa(messageID), fmt.Sprintf("%d-%s", attachmentID, sanitizeFileName(fileName)))
+	destPath, err := resolveAttachmentPath(messagesAttachmentOut, fileName)
+	if err != nil {
+		return err
 	}
 
-	// A sent attachment can't change after the fact, so once it's on disk at
-	// its deterministic auto-generated path, only an explicit --force-refresh
-	// re-fetches it. That immutability rationale doesn't hold for a
-	// user-supplied -o path, which should always be (over)written.
-	if forceRefresh || messagesAttachmentOut != "" || !fileExists(destPath) {
-		client := mcas.New(creds)
-		if err := client.Login(); err != nil {
-			return emitFailure(format, "messages attachment", classifyError(err), err)
-		}
-		data, err := client.MessageAttachmentData(messageID, attachmentID)
-		if err != nil {
-			return emitFailure(format, "messages attachment", classifyError(err), err)
-		}
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o700); err != nil {
-			return err
-		}
-		if err := os.WriteFile(destPath, data, 0o600); err != nil {
-			return err
-		}
+	client := mcas.New(creds)
+	if err := client.Login(); err != nil {
+		return emitFailure(format, "messages attachment", classifyError(err), err)
+	}
+	data, err := client.MessageAttachmentData(messageID, attachmentID)
+	if err != nil {
+		return emitFailure(format, "messages attachment", classifyError(err), err)
+	}
+	if err := os.WriteFile(destPath, data, 0o600); err != nil {
+		return err
 	}
 
 	result := attachmentResult{Path: destPath, FileName: fileName}
@@ -314,9 +305,57 @@ func sanitizeFileName(name string) string {
 	return cleaned
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+// resolveAttachmentPath decides where an attachment should be written and
+// claims that path by creating the (empty) file, so that the name it returns
+// is guaranteed not to collide with anything else on disk. fileName is the
+// name MCAS reports for the attachment; out is the raw --out flag value.
+//
+//   - out == "": save `sanitizeFileName(fileName)` in the current directory,
+//     de-duplicating against any existing file the way a browser does.
+//   - out names an existing directory: same, but inside that directory.
+//   - otherwise out is an exact file path, created (and its parent
+//     directories) as needed, always overwriting whatever is there.
+func resolveAttachmentPath(out, fileName string) (string, error) {
+	sanitized := sanitizeFileName(fileName)
+	if out == "" {
+		return claimUniquePath(".", sanitized)
+	}
+	if info, err := os.Stat(out); err == nil && info.IsDir() {
+		return claimUniquePath(out, sanitized)
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
+		return "", err
+	}
+	f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	f.Close()
+	return filepath.Abs(out)
+}
+
+// claimUniquePath finds the first free "name.ext", "name (1).ext",
+// "name (2).ext", ... in dir and atomically claims it by creating it with
+// O_EXCL, so a concurrent caller can't win the same name between the check
+// and the write.
+func claimUniquePath(dir, name string) (string, error) {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for i := 0; ; i++ {
+		candidate := name
+		if i > 0 {
+			candidate = fmt.Sprintf("%s (%d)%s", base, i, ext)
+		}
+		path := filepath.Join(dir, candidate)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			f.Close()
+			return filepath.Abs(path)
+		}
+		if !os.IsExist(err) {
+			return "", err
+		}
+	}
 }
 
 // renderInboxMessagesText renders one row per message, newest first, in the
