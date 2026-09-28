@@ -278,9 +278,35 @@ func TestFindMessageLocatesAcrossThreads(t *testing.T) {
 }
 
 // TestMessageAttachmentDataDecodesBase64 mirrors the confirmed download
-// mechanics: the proxy's "d" wrapper carries a base64 string of the raw
-// file, not a URL, JSON, or an HTML fragment.
+// mechanics: the proxy's "d" wrapper carries a JSON-encoded string whose
+// value is the base64 of the raw file - i.e. the base64 is encoded twice.
 func TestMessageAttachmentDataDecodesBase64(t *testing.T) {
+	want := []byte("%PDF-1.7 fake pdf bytes")
+	inner, err := json.Marshal(base64.StdEncoding.EncodeToString(want))
+	if err != nil {
+		t.Fatalf("json.Marshal error = %v", err)
+	}
+	outer, err := json.Marshal(string(inner))
+	if err != nil {
+		t.Fatalf("json.Marshal error = %v", err)
+	}
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": ` + string(outer) + `}`))
+	})
+	client.session = Session{StudentID: 99999, UserID: 12345}
+
+	got, err := client.MessageAttachmentData(1001, 52)
+	if err != nil {
+		t.Fatalf("MessageAttachmentData() error = %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("MessageAttachmentData() = %q, want %q", got, want)
+	}
+}
+
+// TestMessageAttachmentDataAcceptsBareBase64 keeps the single-encoded shape
+// working as a fallback, in case a school's proxy doesn't double-encode.
+func TestMessageAttachmentDataAcceptsBareBase64(t *testing.T) {
 	want := []byte("%PDF-1.7 fake pdf bytes")
 	encoded, err := json.Marshal(base64.StdEncoding.EncodeToString(want))
 	if err != nil {
@@ -297,6 +323,26 @@ func TestMessageAttachmentDataDecodesBase64(t *testing.T) {
 	}
 	if string(got) != string(want) {
 		t.Errorf("MessageAttachmentData() = %q, want %q", got, want)
+	}
+}
+
+// TestMessageAttachmentDataInvalidQuotedBase64 ensures a quoted payload that
+// doesn't hold valid base64 surfaces as an *APIError, not a panic or a
+// silently wrong result.
+func TestMessageAttachmentDataInvalidQuotedBase64(t *testing.T) {
+	outer, err := json.Marshal(`"not valid base64!!"`)
+	if err != nil {
+		t.Fatalf("json.Marshal error = %v", err)
+	}
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": ` + string(outer) + `}`))
+	})
+	client.session = Session{StudentID: 99999, UserID: 12345}
+
+	_, err = client.MessageAttachmentData(1001, 52)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("MessageAttachmentData() error = %T, want *APIError", err)
 	}
 }
 

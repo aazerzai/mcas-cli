@@ -482,6 +482,11 @@ func FindMessage(conversations []Conversation, id int) (*InboxMessage, error) {
 // MessageAttachmentData downloads and decodes one attachment's raw bytes.
 // This call reports no filename or content type - just the base64 body -
 // so callers need Conversations()'s MessageAttachment.FileName for that.
+//
+// The proxy JSON-encodes its response a second time: "d" holds a quoted
+// JSON string whose value is the base64, not the bare base64 itself. Bare
+// base64 is still accepted as a fallback in case that behaviour differs
+// between schools or changes later.
 func (c *Client) MessageAttachmentData(messageID, attachmentID int) ([]byte, error) {
 	raw, err := c.get(fmt.Sprintf(epMessageAttachment, c.session.UserID, messageID, attachmentID))
 	if err != nil {
@@ -490,7 +495,15 @@ func (c *Client) MessageAttachmentData(messageID, attachmentID int) ([]byte, err
 	if raw == "" {
 		return nil, &APIError{Message: fmt.Sprintf("attachment %d on message %d not found", attachmentID, messageID)}
 	}
-	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	payload := strings.TrimSpace(raw)
+	if strings.HasPrefix(payload, `"`) {
+		var unquoted string
+		if err := json.Unmarshal([]byte(payload), &unquoted); err != nil {
+			return nil, &APIError{Message: "decoding attachment: " + err.Error()}
+		}
+		payload = strings.TrimSpace(unquoted)
+	}
+	data, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
 		return nil, &APIError{Message: "decoding attachment: " + err.Error()}
 	}
