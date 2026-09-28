@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -437,18 +438,45 @@ func (c *Client) Conversations() ([]Conversation, error) {
 	return conversations, nil
 }
 
-// Conversation fetches the full message thread with one sender.
-func (c *Client) Conversation(recipientID int) (*Conversation, error) {
-	conversations, err := c.Conversations()
-	if err != nil {
-		return nil, err
-	}
-	for i := range conversations {
-		if conversations[i].RecipientID == recipientID {
-			return &conversations[i], nil
+// FlattenConversations flattens every thread into a single list of
+// messages with their sender inlined, newest first. MCAS doesn't guarantee
+// order within or across threads, so ties on Date are broken by higher ID
+// first.
+func FlattenConversations(conversations []Conversation) []InboxMessage {
+	var messages []InboxMessage
+	for _, conv := range conversations {
+		for _, m := range conv.Messages {
+			messages = append(messages, InboxMessage{
+				ID:            m.ID,
+				RecipientID:   conv.RecipientID,
+				RecipientName: conv.RecipientName,
+				Subject:       m.Subject,
+				Body:          m.Body,
+				Date:          m.Date,
+				Sent:          m.Sent,
+				Read:          m.Read,
+				Links:         m.Links,
+				Attachments:   m.Attachments,
+			})
 		}
 	}
-	return nil, &APIError{Message: fmt.Sprintf("no message thread found with recipient id %d", recipientID)}
+	sort.SliceStable(messages, func(i, j int) bool {
+		if !messages[i].Date.Equal(messages[j].Date) {
+			return messages[i].Date.After(messages[j].Date)
+		}
+		return messages[i].ID > messages[j].ID
+	})
+	return messages
+}
+
+// FindMessage looks up one message by id across every thread.
+func FindMessage(conversations []Conversation, id int) (*InboxMessage, error) {
+	for _, m := range FlattenConversations(conversations) {
+		if m.ID == id {
+			return &m, nil
+		}
+	}
+	return nil, &APIError{Message: fmt.Sprintf("no message found with id %d", id)}
 }
 
 // MessageAttachmentData downloads and decodes one attachment's raw bytes.

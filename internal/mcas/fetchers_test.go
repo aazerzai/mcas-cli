@@ -3,8 +3,10 @@ package mcas
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // TestBehaviourYearComputesPointsAndMapsSubjects mirrors
@@ -192,28 +194,86 @@ func TestConversationsJoinsAttachmentsAndExtractsLinks(t *testing.T) {
 	}
 }
 
-// TestConversationFindsByRecipientID mirrors the "show a single thread"
-// command: Conversation() must extract just the matching thread and error
-// clearly when it isn't found.
-func TestConversationFindsByRecipientID(t *testing.T) {
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"d": "{\"Conversations\":[` +
-			`{\"RecipientID\":-1,\"RecipientName\":\"\",\"UnreadCount\":0,\"Messages\":[]},` +
-			`{\"RecipientID\":508,\"RecipientName\":\"Mrs Smith\",\"UnreadCount\":0,\"Messages\":[]}` +
-			`],\"MessageAttachments\":[]}"}`))
-	})
-	client.session = Session{StudentID: 99999, UserID: 12345}
+// TestFlattenConversationsOrdersNewestFirst mirrors the address-by-message-id
+// redesign: flattening must keep every message with its sender inlined,
+// newest first, breaking a tie on Date by the higher message ID - MCAS
+// doesn't guarantee order within or across threads.
+func TestFlattenConversationsOrdersNewestFirst(t *testing.T) {
+	sameDate := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
+	conversations := []Conversation{
+		{
+			RecipientID:   508,
+			RecipientName: "Mrs S Patel",
+			Messages: []Message{
+				{ID: 100, Subject: "Older", Date: time.Date(2026, 9, 10, 9, 0, 0, 0, time.UTC)},
+				{ID: 300, Subject: "Tie low", Date: sameDate},
+			},
+		},
+		{
+			RecipientID:   1,
+			RecipientName: "",
+			Messages: []Message{
+				{ID: 400, Subject: "Newest", Date: time.Date(2026, 9, 24, 16, 16, 0, 0, time.UTC)},
+				{ID: 301, Subject: "Tie high", Date: sameDate},
+			},
+		},
+	}
 
-	conv, err := client.Conversation(508)
+	messages := FlattenConversations(conversations)
+	if len(messages) != 4 {
+		t.Fatalf("got %d messages, want 4", len(messages))
+	}
+
+	wantOrder := []int{400, 301, 300, 100}
+	for i, id := range wantOrder {
+		if messages[i].ID != id {
+			t.Errorf("messages[%d].ID = %d, want %d (order = %v)", i, messages[i].ID, id, idsOf(messages))
+		}
+	}
+
+	if messages[3].RecipientID != 508 || messages[3].RecipientName != "Mrs S Patel" {
+		t.Errorf("messages[3] = %+v, want RecipientID=508 RecipientName=Mrs S Patel", messages[3])
+	}
+	if messages[0].RecipientID != 1 || messages[0].RecipientName != "" {
+		t.Errorf("messages[0] = %+v, want RecipientID=1 RecipientName=\"\"", messages[0])
+	}
+}
+
+func idsOf(messages []InboxMessage) []int {
+	ids := make([]int, len(messages))
+	for i, m := range messages {
+		ids[i] = m.ID
+	}
+	return ids
+}
+
+// TestFindMessageLocatesAcrossThreads mirrors "open a single message":
+// FindMessage must locate a message regardless of which thread holds it,
+// and return an APIError with a stable message when the id isn't found.
+func TestFindMessageLocatesAcrossThreads(t *testing.T) {
+	conversations := []Conversation{
+		{RecipientID: 508, RecipientName: "Mrs S Patel", Messages: []Message{{ID: 1001, Subject: "Homework"}}},
+		{RecipientID: 462, RecipientName: "Mrs B Prajapati", Messages: []Message{{ID: 2002, Subject: "Trip"}}},
+	}
+
+	msg, err := FindMessage(conversations, 2002)
 	if err != nil {
-		t.Fatalf("Conversation(508) error = %v", err)
+		t.Fatalf("FindMessage(2002) error = %v", err)
 	}
-	if conv.RecipientName != "Mrs Smith" {
-		t.Errorf("RecipientName = %q, want Mrs Smith", conv.RecipientName)
+	if msg.RecipientID != 462 || msg.Subject != "Trip" {
+		t.Errorf("FindMessage(2002) = %+v, want RecipientID=462 Subject=Trip", msg)
 	}
 
-	if _, err := client.Conversation(999); err == nil {
-		t.Error("Conversation(999) error = nil, want an error for an unknown recipient")
+	_, err = FindMessage(conversations, 999)
+	if err == nil {
+		t.Fatal("FindMessage(999) error = nil, want an error for an unknown id")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("FindMessage(999) error = %T, want *APIError", err)
+	}
+	if apiErr.Message != "no message found with id 999" {
+		t.Errorf("FindMessage(999) error message = %q, want %q", apiErr.Message, "no message found with id 999")
 	}
 }
 

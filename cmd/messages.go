@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -16,21 +18,23 @@ import (
 	"github.com/dental-dash/my-child-at-school-cli/internal/output"
 )
 
-var messagesCmd = &cobra.Command{
-	Use:   "messages",
-	Short: "Show messages from teachers and the school",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runCommand("messages", "all", func(client *mcas.Client) ([]mcas.Conversation, error) {
-			return client.Conversations()
-		}, renderConversationsText)
-	},
-}
+var (
+	messagesLimit  int
+	messagesFrom   int
+	messagesUnread bool
+	messagesSince  string
+)
 
-var messagesShowCmd = &cobra.Command{
-	Use:   "show <recipient-id>",
-	Short: "Show the full message thread with one sender",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runMessagesShow,
+var messagesCmd = &cobra.Command{
+	Use:   "messages [message-id]",
+	Short: "Show messages from teachers and the school, newest first",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if len(args) == 1 {
+			return runMessageByID(cmd, args[0])
+		}
+		return runMessagesList(cmd)
+	},
 }
 
 var messagesAttachmentOut string
@@ -43,20 +47,146 @@ var messagesAttachmentCmd = &cobra.Command{
 }
 
 func init() {
+	messagesCmd.Flags().IntVar(&messagesLimit, "limit", 0, "show at most N messages, applied after filtering (default: all)")
+	messagesCmd.Flags().IntVar(&messagesFrom, "from", 0, "only messages from this recipient id")
+	messagesCmd.Flags().BoolVar(&messagesUnread, "unread", false, "only unread messages")
+	messagesCmd.Flags().StringVar(&messagesSince, "since", "", "only messages on or after this date, YYYY-MM-DD (local time)")
 	messagesAttachmentCmd.Flags().StringVarP(&messagesAttachmentOut, "out", "o", "", "file path to save the attachment to (default: under the cache directory)")
-	messagesCmd.AddCommand(messagesShowCmd)
 	messagesCmd.AddCommand(messagesAttachmentCmd)
 	rootCmd.AddCommand(messagesCmd)
 }
 
-func runMessagesShow(cmd *cobra.Command, args []string) error {
-	recipientID, err := strconv.Atoi(args[0])
-	if err != nil {
-		return fmt.Errorf("invalid recipient id %q: want an integer", args[0])
+// loadConversations serves the shared "all" cache entry that both list mode,
+// message-id mode and messages attachment read, logging in and fetching
+// fresh from MCAS on a cache miss.
+func loadConversations(c *cache.Cache, creds mcas.Credentials) ([]mcas.Conversation, error) {
+	return fetchCached(c, "messages:"+creds.Email+":all", forceRefresh, func() ([]mcas.Conversation, error) {
+		client := mcas.New(creds)
+		if err := client.Login(); err != nil {
+			var zero []mcas.Conversation
+			return zero, err
+		}
+		return client.Conversations()
+	})
+}
+
+// parseSinceFlag parses a --since flag value using the same YYYY-MM-DD
+// layout as attendance --date. An empty value means no lower bound.
+func parseSinceFlag(value string) (*time.Time, error) {
+	if value == "" {
+		return nil, nil
 	}
-	return runCommand("messages", "show:"+args[0], func(client *mcas.Client) (*mcas.Conversation, error) {
-		return client.Conversation(recipientID)
-	}, renderConversationText)
+	t, err := time.Parse(dateFormat, value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --since %q: want YYYY-MM-DD", value)
+	}
+	return &t, nil
+}
+
+// filterMessages applies --from, --unread and --since, then --limit, to an
+// already newest-first message list.
+func filterMessages(messages []mcas.InboxMessage, hasFrom bool, since *time.Time) []mcas.InboxMessage {
+	filtered := make([]mcas.InboxMessage, 0, len(messages))
+	for _, m := range messages {
+		if hasFrom && m.RecipientID != messagesFrom {
+			continue
+		}
+		if messagesUnread && m.Read {
+			continue
+		}
+		if since != nil && m.Date.Before(*since) {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	if messagesLimit > 0 && len(filtered) > messagesLimit {
+		filtered = filtered[:messagesLimit]
+	}
+	return filtered
+}
+
+func runMessagesList(cmd *cobra.Command) error {
+	since, err := parseSinceFlag(messagesSince)
+	if err != nil {
+		return err
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	format, err := resolveFormat(cfg)
+	if err != nil {
+		return err
+	}
+	creds, err := cfg.ResolveCredentials(flagEmail, flagPassword)
+	if err != nil {
+		return emitFailure(format, "messages", output.AuthErrorType, err)
+	}
+	cacheDir, err := cfg.CacheDir()
+	if err != nil {
+		return err
+	}
+	c, err := cache.New(cacheDir, cfg.CacheTTL())
+	if err != nil {
+		return err
+	}
+
+	conversations, err := loadConversations(c, creds)
+	if err != nil {
+		return emitFailure(format, "messages", classifyError(err), err)
+	}
+
+	messages := filterMessages(mcas.FlattenConversations(conversations), cmd.Flags().Changed("from"), since)
+	return output.Result(os.Stdout, format, "messages", messages, renderInboxMessagesText)
+}
+
+// runMessageByID looks up a single message. List flags are rejected here
+// (rather than silently ignored) before the id itself is validated, since
+// whether a positional argument was given at all - not whether it parses -
+// is what puts the command in id mode.
+func runMessageByID(cmd *cobra.Command, arg string) error {
+	for _, name := range []string{"limit", "from", "unread", "since"} {
+		if cmd.Flags().Changed(name) {
+			return fmt.Errorf("--%s can't be used with a message id", name)
+		}
+	}
+	messageID, err := strconv.Atoi(arg)
+	if err != nil {
+		return fmt.Errorf("invalid message id %q: want an integer", arg)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	format, err := resolveFormat(cfg)
+	if err != nil {
+		return err
+	}
+	creds, err := cfg.ResolveCredentials(flagEmail, flagPassword)
+	if err != nil {
+		return emitFailure(format, "messages", output.AuthErrorType, err)
+	}
+	cacheDir, err := cfg.CacheDir()
+	if err != nil {
+		return err
+	}
+	c, err := cache.New(cacheDir, cfg.CacheTTL())
+	if err != nil {
+		return err
+	}
+
+	conversations, err := loadConversations(c, creds)
+	if err != nil {
+		return emitFailure(format, "messages", classifyError(err), err)
+	}
+
+	message, err := mcas.FindMessage(conversations, messageID)
+	if err != nil {
+		return emitFailure(format, "messages", classifyError(err), err)
+	}
+	return output.Result(os.Stdout, format, "messages", message, renderInboxMessageText)
 }
 
 func runMessagesAttachment(cmd *cobra.Command, args []string) error {
@@ -93,14 +223,7 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 
 	// The attachment download call itself reports no filename, so the
 	// conversations listing has to be consulted first to name the file.
-	conversations, err := fetchCached(c, "messages:"+creds.Email+":all", forceRefresh, func() ([]mcas.Conversation, error) {
-		client := mcas.New(creds)
-		if err := client.Login(); err != nil {
-			var zero []mcas.Conversation
-			return zero, err
-		}
-		return client.Conversations()
-	})
+	conversations, err := loadConversations(c, creds)
 	if err != nil {
 		return emitFailure(format, "messages attachment", classifyError(err), err)
 	}
@@ -196,79 +319,86 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func renderConversationsText(w io.Writer, data any) error {
-	conversations := data.([]mcas.Conversation)
-	if len(conversations) == 0 {
+// renderInboxMessagesText renders one row per message, newest first, in the
+// flat "ID  DATE  FROM  SUBJECT  [N att] [unread]" form.
+func renderInboxMessagesText(w io.Writer, data any) error {
+	messages := data.([]mcas.InboxMessage)
+	if len(messages) == 0 {
 		_, err := fmt.Fprintln(w, "No messages.")
 		return err
 	}
-	for _, conv := range conversations {
-		name := conv.RecipientName
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, "ID\tDATE\tFROM\tSUBJECT"); err != nil {
+		return err
+	}
+	for _, m := range messages {
+		name := m.RecipientName
 		if name == "" {
 			name = "(unknown sender)"
 		}
-		last := "no messages"
-		if len(conv.Messages) > 0 {
-			m := conv.Messages[len(conv.Messages)-1]
-			last = m.Date.Format(dateFormat) + " " + m.Subject
+		subject := m.Subject
+		if len(m.Attachments) > 0 {
+			subject += fmt.Sprintf("  [%d att]", len(m.Attachments))
 		}
-		unread := ""
-		if conv.UnreadCount > 0 {
-			unread = fmt.Sprintf(" (%d unread)", conv.UnreadCount)
+		if !m.Read {
+			subject += "  [unread]"
 		}
-		if _, err := fmt.Fprintf(w, "%d  %s  %d messages%s - %s\n", conv.RecipientID, name, len(conv.Messages), unread, last); err != nil {
+		if _, err := fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", m.ID, m.Date.Format(dateFormat), name, subject); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tw.Flush()
 }
 
-func renderConversationText(w io.Writer, data any) error {
-	conv := data.(*mcas.Conversation)
-	name := conv.RecipientName
+func renderInboxMessageText(w io.Writer, data any) error {
+	m := data.(*mcas.InboxMessage)
+	name := m.RecipientName
 	if name == "" {
 		name = "(unknown sender)"
 	}
-	if _, err := fmt.Fprintf(w, "%s (recipient id %d)\n", name, conv.RecipientID); err != nil {
+	direction := "Received"
+	if m.Sent {
+		direction = "Sent"
+	}
+	read := "no"
+	if m.Read {
+		read = "yes"
+	}
+	if _, err := fmt.Fprintf(w, "From:      %s (recipient id %d)\n", name, m.RecipientID); err != nil {
 		return err
 	}
-	if len(conv.Messages) == 0 {
-		_, err := fmt.Fprintln(w, "No messages in this thread.")
+	if _, err := fmt.Fprintf(w, "Date:      %s\n", m.Date.Format("2006-01-02 15:04")); err != nil {
 		return err
 	}
-	for _, m := range conv.Messages {
-		direction := "Received"
-		if m.Sent {
-			direction = "Sent"
-		}
-		read := ""
-		if !m.Read {
-			read = " (unread)"
-		}
-		if _, err := fmt.Fprintf(w, "\n[%s] %s%s - %s\n", m.Date.Format("2006-01-02 15:04"), direction, read, m.Subject); err != nil {
+	if _, err := fmt.Fprintf(w, "Direction: %s\n", direction); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Read:      %s\n", read); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Subject:   %s\n\n", m.Subject); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, m.Body); err != nil {
+		return err
+	}
+	if len(m.Links) > 0 {
+		if _, err := fmt.Fprintln(w, "\nLinks:"); err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintln(w, m.Body); err != nil {
+		for _, l := range m.Links {
+			if _, err := fmt.Fprintln(w, " -", l); err != nil {
+				return err
+			}
+		}
+	}
+	if len(m.Attachments) > 0 {
+		if _, err := fmt.Fprintln(w, "\nAttachments:"); err != nil {
 			return err
 		}
-		if len(m.Links) > 0 {
-			if _, err := fmt.Fprintln(w, "Links:"); err != nil {
+		for _, a := range m.Attachments {
+			if _, err := fmt.Fprintf(w, " - [%d] %s   (mcas messages attachment %d %d)\n", a.ID, a.FileName, m.ID, a.ID); err != nil {
 				return err
-			}
-			for _, l := range m.Links {
-				if _, err := fmt.Fprintln(w, " -", l); err != nil {
-					return err
-				}
-			}
-		}
-		if len(m.Attachments) > 0 {
-			if _, err := fmt.Fprintln(w, "Attachments:"); err != nil {
-				return err
-			}
-			for _, a := range m.Attachments {
-				if _, err := fmt.Fprintf(w, " - [%d] %s\n", a.ID, a.FileName); err != nil {
-					return err
-				}
 			}
 		}
 	}
