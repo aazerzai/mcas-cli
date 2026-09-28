@@ -36,12 +36,14 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	reader := bufio.NewReader(cmd.InOrStdin())
+
 	email := flagEmail
 	if email == "" {
 		email = os.Getenv("MCAS_EMAIL")
 	}
 	if email == "" {
-		email, err = promptLine(cmd.InOrStdin(), cmd.OutOrStdout(), "Email: ")
+		email, err = promptLine(reader, cmd.OutOrStdout(), "Email: ")
 		if err != nil {
 			return err
 		}
@@ -51,7 +53,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 		password = os.Getenv("MCAS_PASSWORD")
 	}
 	if password == "" {
-		password, err = promptPassword(cmd.OutOrStdout(), "Password: ")
+		password, err = promptPassword(reader, cmd.OutOrStdout(), "Password: ")
 		if err != nil {
 			return err
 		}
@@ -79,18 +81,18 @@ func renderLoginText(w io.Writer, data any) error {
 	return err
 }
 
-func promptLine(in io.Reader, out io.Writer, prompt string) (string, error) {
+func promptLine(in *bufio.Reader, out io.Writer, prompt string) (string, error) {
 	if _, err := fmt.Fprint(out, prompt); err != nil {
 		return "", err
 	}
-	line, err := bufio.NewReader(in).ReadString('\n')
+	line, err := in.ReadString('\n')
 	if err != nil && err != io.EOF {
 		return "", err
 	}
 	return strings.TrimSpace(line), nil
 }
 
-func promptPassword(out io.Writer, prompt string) (string, error) {
+func promptPassword(in *bufio.Reader, out io.Writer, prompt string) (string, error) {
 	if _, err := fmt.Fprint(out, prompt); err != nil {
 		return "", err
 	}
@@ -98,7 +100,7 @@ func promptPassword(out io.Writer, prompt string) (string, error) {
 	if !term.IsTerminal(fd) {
 		// Not an interactive terminal (e.g. piped input in scripts/CI) -
 		// fall back to a plain line read rather than failing outright.
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := in.ReadString('\n')
 		if err != nil && err != io.EOF {
 			return "", err
 		}
