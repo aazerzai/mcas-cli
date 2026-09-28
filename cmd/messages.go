@@ -106,6 +106,9 @@ func filterMessages(messages []mcas.InboxMessage, hasFrom bool, since *time.Time
 }
 
 func runMessagesList(cmd *cobra.Command) error {
+	if messagesLimit < 0 {
+		return fmt.Errorf("invalid --limit %d: must be 0 or more", messagesLimit)
+	}
 	since, err := parseSinceFlag(messagesSince)
 	if err != nil {
 		return err

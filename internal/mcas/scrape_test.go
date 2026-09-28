@@ -1,7 +1,6 @@
 package mcas
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -31,15 +30,15 @@ const dashboardHTML = `
 `
 
 const behaviourHTML = `
-<table class='table'><thead><tr>
-  <th>Date</th><th>Class</th><th>Subject</th><th>Teacher</th><th>Comment</th><th>Event</th>
+<table class='table table-theme'><thead><tr>
+  <th>Date</th><th>Class</th><th>Teacher</th><th>Event</th><th>Outcome</th>
 </tr></thead><tbody>
-  <tr><td>11/09/2026</td><td>7x/Mu1</td><td>Music</td><td>Mr Example</td>
-      <td>Bulk event</td>
-      <td>Lesson Mark 1: Above Expected Attitude and Behaviour</td></tr>
-  <tr><td>11/09/2026</td><td>7ZZ</td><td>Tutor Period</td><td>Ms Example</td>
-      <td>Bulk event</td>
-      <td>Lesson Mark 2: Expected Attitude and Behaviour</td></tr>
+<tr><td>07/09/2026</td><td>7X</td><td>Mr A Teacher</td>
+    <td><i class='fa fa-times-circle'></i> Example negative event</td><td>SANCT</td></tr>
+<tr><td>07/09/2026</td><td>7X</td><td>Mr A Teacher</td>
+    <td><i class='fa fa-check-circle'></i> example positive event</td><td>REWARD</td></tr>
+<tr><td>07/09/2026</td><td>7X</td><td>Mr A Teacher</td>
+    <td><i class='fa fa-star'></i> unknown icon</td><td></td></tr>
 </tbody></table>
 `
 
@@ -140,14 +139,18 @@ func TestParseMessageDateHandlesVariableFractionalSeconds(t *testing.T) {
 
 func TestParseBehaviourHTML(t *testing.T) {
 	events := parseBehaviourHTML(behaviourHTML)
-	if len(events) != 2 {
-		t.Fatalf("got %d events, want 2", len(events))
+	want := []BehaviourDayEvent{
+		{Date: "2026-09-07", Class: "7X", Teacher: "Mr A Teacher", Description: "Example negative event", Outcome: "SANCT", Type: "Negative"},
+		{Date: "2026-09-07", Class: "7X", Teacher: "Mr A Teacher", Description: "example positive event", Outcome: "REWARD", Type: "Positive"},
+		{Date: "2026-09-07", Class: "7X", Teacher: "Mr A Teacher", Description: "unknown icon"},
 	}
-	if events[0]["Subject"] != "Music" {
-		t.Errorf("Subject = %q, want Music", events[0]["Subject"])
+	if len(events) != len(want) {
+		t.Fatalf("got %d events, want %d", len(events), len(want))
 	}
-	if got := events[0]["Event"]; got == "" || !strings.Contains(got, "Lesson Mark 1") {
-		t.Errorf("Event = %q, want it to contain 'Lesson Mark 1'", got)
+	for i := range want {
+		if events[i] != want[i] {
+			t.Errorf("events[%d] = %+v, want %+v", i, events[i], want[i])
+		}
 	}
 }
 

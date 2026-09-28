@@ -68,7 +68,7 @@ go run . attendance
 | `login`       | Sign in and store credentials in the OS keychain                      |
 | `logout`      | Remove stored credentials from the OS keychain                        |
 | `attendance`  | Registration marks for a day (`--date YYYY-MM-DD`, default: today)    |
-| `behaviour`   | Behaviour points/events for the academic year, or a day with `--date` |
+| `behaviour`   | Behaviour points/events for the academic year, or a day with `--date`; `--limit N` keeps the newest N |
 | `timetable`   | This week's timetable                                                 |
 | `dinner`      | Dinner money credit balance                                           |
 | `detentions`  | Recorded detentions                                                   |
@@ -77,6 +77,14 @@ go run . attendance
 | `messages`    | Every message, newest first (`--limit`, `--from`, `--unread`, `--since`) |
 | `messages <message-id>` | A single message in full                                    |
 | `messages attachment <message-id> <attachment-id>` | Download an attachment |
+
+`behaviour` lists each event with its type, points, subject or class, teacher,
+description and outcome. The year call only has type and points, so the rest
+is fetched per event day (only for the events shown) and cached; a day that
+can't be loaded or matched is left without those fields, with a warning on
+stderr. Aggregate negative totals (`negative`, `all_time_negative`) are
+absolute values; each event's `points` is signed. `--date` returns a JSON
+array of events (`[]` when there are none).
 
 Global flags (available on every command):
 
