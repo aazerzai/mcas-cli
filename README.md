@@ -74,6 +74,9 @@ go run . attendance
 | `detentions`  | Recorded detentions                                                   |
 | `reports`     | Published school reports                                              |
 | `clubs`       | Clubs and trips the pupil is enrolled on                              |
+| `messages`    | Message threads from teachers and the school                         |
+| `messages show <recipient-id>` | Full message thread with one sender                  |
+| `messages attachment <message-id> <attachment-id>` | Download an attachment |
 
 Global flags (available on every command):
 
@@ -150,6 +153,25 @@ to bypass the cache and fetch live data.
 The config file lives at `$XDG_CONFIG_HOME/my-child-at-school-cli/config.yaml`
 (or `~/.config/my-child-at-school-cli/config.yaml`); the cache lives under
 `$XDG_CACHE_HOME/my-child-at-school-cli` (or `~/.cache/my-child-at-school-cli`).
+
+## Messages
+
+`messages` lists every message thread from teachers and the school;
+`messages show <recipient-id>` shows one thread in full, including any
+links found in the message body and attachment metadata; `messages
+attachment <message-id> <attachment-id>` downloads one attachment.
+
+MCAS returns the whole inbox in a single call - there is no pagination to
+page through, and reading messages never marks them read on the server
+(that's a separate action this CLI never takes).
+
+Downloaded attachments are saved under
+`$XDG_CACHE_HOME/my-child-at-school-cli/attachments/<message-id>/`,
+`0o700`/`0o600` permissioned like the rest of the cache, and are treated as
+immutable: once a file exists at its deterministic path it's never
+re-downloaded, even past the normal cache TTL, unless `--force-refresh` is
+passed. Pass `-o`/`--out` to `messages attachment` to save somewhere else
+instead.
 
 ## Known limitations
 

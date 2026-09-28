@@ -92,6 +92,50 @@ func TestReadDashboardContext(t *testing.T) {
 	if ctx.StudentName != "Alex Smith" {
 		t.Errorf("StudentName = %q, want Alex Smith (Surname, Forename reordered)", ctx.StudentName)
 	}
+	if ctx.UserID != 12345 {
+		t.Errorf("UserID = %d, want 12345", ctx.UserID)
+	}
+}
+
+func TestExtractLinksTrimsTrailingPunctuation(t *testing.T) {
+	tests := []struct {
+		body string
+		want []string
+	}{
+		{"See https://forms.office.com/abc for details.", []string{"https://forms.office.com/abc"}},
+		{"No links here.", nil},
+		{"Two links: https://a.example (info) and www.b.example, thanks.", []string{"https://a.example", "www.b.example"}},
+	}
+	for _, tt := range tests {
+		got := extractLinks(tt.body)
+		if len(got) != len(tt.want) {
+			t.Errorf("extractLinks(%q) = %v, want %v", tt.body, got, tt.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("extractLinks(%q)[%d] = %q, want %q", tt.body, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestParseMessageDateHandlesVariableFractionalSeconds(t *testing.T) {
+	tests := []string{
+		"2026-09-24T16:16:33.42",
+		"2026-09-24T16:16:33.9",
+		"2026-09-24T16:16:33.999",
+		"2026-09-24T16:16:33",
+	}
+	for _, s := range tests {
+		got := parseMessageDate(s)
+		if got.IsZero() {
+			t.Errorf("parseMessageDate(%q) is zero, want a parsed time", s)
+		}
+		if got.Year() != 2026 || got.Month() != 9 || got.Day() != 24 {
+			t.Errorf("parseMessageDate(%q) = %v, want 2026-09-24", s, got)
+		}
+	}
 }
 
 func TestParseBehaviourHTML(t *testing.T) {

@@ -88,18 +88,24 @@ func runCommand[T any](name, cacheKeyExtra string, fetch func(client *mcas.Clien
 		return fetch(client)
 	})
 	if err != nil {
-		errType := output.APIErrorType
-		var authErr *mcas.AuthError
-		if errors.As(err, &authErr) {
-			errType = output.AuthErrorType
-		}
-		return emitFailure(format, name, errType, err)
+		return emitFailure(format, name, classifyError(err), err)
 	}
 
 	if err := output.Result(os.Stdout, format, name, data, render); err != nil {
 		return err
 	}
 	return nil
+}
+
+// classifyError maps a client error to the stable ErrorType the JSON output
+// envelope reports, so a script/agent can branch on it without
+// string-matching messages.
+func classifyError(err error) output.ErrorType {
+	var authErr *mcas.AuthError
+	if errors.As(err, &authErr) {
+		return output.AuthErrorType
+	}
+	return output.APIErrorType
 }
 
 func emitFailure(format output.Format, name string, errType output.ErrorType, err error) error {

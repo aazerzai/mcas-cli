@@ -1,6 +1,7 @@
 package mcas
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"testing"
@@ -145,3 +146,109 @@ func TestDinnerBalanceScrapesTheWidget(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// TestConversationsJoinsAttachmentsAndExtractsLinks mirrors the live-capture
+// schema recorded in the issue analysis: attachments arrive as a flat list
+// keyed by MessageID and must be joined onto their message, and bare URLs
+// in the plain-text body become the Links field.
+func TestConversationsJoinsAttachmentsAndExtractsLinks(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": "{\"Conversations\":[` +
+			`{\"RecipientID\":508,\"RecipientName\":\"Mrs Smith\",\"UnreadCount\":1,\"PublishedDocumentID\":null,\"Messages\":[` +
+			`{\"MessageID\":1001,\"Subject\":\"Homework\",\"Message\":\"See https://forms.office.com/abc for the form.\",\"MessageDate\":\"2026-09-24T16:16:33.42\",\"Mode\":0,\"IsRead\":false}` +
+			`]}` +
+			`],\"MessageAttachments\":[` +
+			`{\"AttachmentID\":52,\"FileName\":\"letter.pdf\",\"MessageID\":1001}` +
+			`]}"}`))
+	})
+	client.session = Session{StudentID: 99999, UserID: 12345}
+
+	conversations, err := client.Conversations()
+	if err != nil {
+		t.Fatalf("Conversations() error = %v", err)
+	}
+	if len(conversations) != 1 {
+		t.Fatalf("got %d conversations, want 1", len(conversations))
+	}
+	conv := conversations[0]
+	if conv.RecipientID != 508 || conv.RecipientName != "Mrs Smith" || conv.UnreadCount != 1 {
+		t.Errorf("conversation = %+v, want RecipientID=508 RecipientName=Mrs Smith UnreadCount=1", conv)
+	}
+	if len(conv.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(conv.Messages))
+	}
+	msg := conv.Messages[0]
+	if msg.Sent {
+		t.Errorf("msg.Sent = true, want false for Mode 0")
+	}
+	if msg.Read {
+		t.Errorf("msg.Read = true, want false for IsRead:false")
+	}
+	if len(msg.Links) != 1 || msg.Links[0] != "https://forms.office.com/abc" {
+		t.Errorf("msg.Links = %v, want [https://forms.office.com/abc]", msg.Links)
+	}
+	if len(msg.Attachments) != 1 || msg.Attachments[0].ID != 52 || msg.Attachments[0].FileName != "letter.pdf" {
+		t.Errorf("msg.Attachments = %+v, want one attachment id=52 name=letter.pdf", msg.Attachments)
+	}
+}
+
+// TestConversationFindsByRecipientID mirrors the "show a single thread"
+// command: Conversation() must extract just the matching thread and error
+// clearly when it isn't found.
+func TestConversationFindsByRecipientID(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": "{\"Conversations\":[` +
+			`{\"RecipientID\":-1,\"RecipientName\":\"\",\"UnreadCount\":0,\"Messages\":[]},` +
+			`{\"RecipientID\":508,\"RecipientName\":\"Mrs Smith\",\"UnreadCount\":0,\"Messages\":[]}` +
+			`],\"MessageAttachments\":[]}"}`))
+	})
+	client.session = Session{StudentID: 99999, UserID: 12345}
+
+	conv, err := client.Conversation(508)
+	if err != nil {
+		t.Fatalf("Conversation(508) error = %v", err)
+	}
+	if conv.RecipientName != "Mrs Smith" {
+		t.Errorf("RecipientName = %q, want Mrs Smith", conv.RecipientName)
+	}
+
+	if _, err := client.Conversation(999); err == nil {
+		t.Error("Conversation(999) error = nil, want an error for an unknown recipient")
+	}
+}
+
+// TestMessageAttachmentDataDecodesBase64 mirrors the confirmed download
+// mechanics: the proxy's "d" wrapper carries a base64 string of the raw
+// file, not a URL, JSON, or an HTML fragment.
+func TestMessageAttachmentDataDecodesBase64(t *testing.T) {
+	want := []byte("%PDF-1.7 fake pdf bytes")
+	encoded, err := json.Marshal(base64.StdEncoding.EncodeToString(want))
+	if err != nil {
+		t.Fatalf("json.Marshal error = %v", err)
+	}
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": ` + string(encoded) + `}`))
+	})
+	client.session = Session{StudentID: 99999, UserID: 12345}
+
+	got, err := client.MessageAttachmentData(1001, 52)
+	if err != nil {
+		t.Fatalf("MessageAttachmentData() error = %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("MessageAttachmentData() = %q, want %q", got, want)
+	}
+}
+
+// TestMessageAttachmentDataNotFound mirrors the proxy's "Error 404" sentinel
+// for an unknown attachment id, which client.get already turns into "".
+func TestMessageAttachmentDataNotFound(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": "Error 404 - Requested API call reference Not Found."}`))
+	})
+	client.session = Session{StudentID: 99999, UserID: 12345}
+
+	if _, err := client.MessageAttachmentData(1001, 999); err == nil {
+		t.Error("MessageAttachmentData() error = nil, want an error for a missing attachment")
+	}
+}

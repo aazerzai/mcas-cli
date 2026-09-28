@@ -103,6 +103,7 @@ func (c *Client) Login() error {
 		SchoolID:    ctx.SchoolID,
 		SchoolName:  ctx.SchoolName,
 		StudentName: ctx.StudentName,
+		UserID:      ctx.UserID,
 	}
 	return nil
 }

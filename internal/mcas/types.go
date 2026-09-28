@@ -16,6 +16,7 @@ type Session struct {
 	SchoolName  string
 	StudentName string
 	YearID      int // lazily populated on first behaviour-related call
+	UserID      int // the parent's own user id, needed by the Messages endpoints
 }
 
 // ModuleFlags reports which MCAS modules the school has licensed. A module
@@ -137,4 +138,34 @@ type Lesson struct {
 type DinnerBalance struct {
 	Amount   float64 `json:"amount"`
 	Currency string  `json:"currency"` // always "GBP" - MCAS only serves UK schools
+}
+
+// Conversation is a message thread with one sender (a teacher or the school).
+type Conversation struct {
+	RecipientID         int       `json:"recipient_id"`
+	RecipientName       string    `json:"recipient_name,omitempty"` // can be empty for the school itself
+	UnreadCount         int       `json:"unread_count"`
+	PublishedDocumentID *int      `json:"published_document_id,omitempty"` // set for report-comment threads
+	Messages            []Message `json:"messages"`
+}
+
+// Message is one message within a Conversation. Bodies are plain text, not
+// HTML - Links is extracted from bare URLs found in Body.
+type Message struct {
+	ID          int                 `json:"id"`
+	Subject     string              `json:"subject"`
+	Body        string              `json:"body"`
+	Date        time.Time           `json:"date"`
+	Sent        bool                `json:"sent"` // false: from the school/teacher, true: sent by the parent
+	Read        bool                `json:"read"`
+	Links       []string            `json:"links,omitempty"`
+	Attachments []MessageAttachment `json:"attachments,omitempty"`
+}
+
+// MessageAttachment is a file attached to a Message. MCAS reports only a
+// file name here - no MIME type or size - so callers infer type from the
+// name's extension.
+type MessageAttachment struct {
+	ID       int    `json:"id"`
+	FileName string `json:"file_name"`
 }
