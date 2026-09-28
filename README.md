@@ -76,7 +76,7 @@ go run . attendance
 | `clubs`       | Clubs and trips the pupil is enrolled on                              |
 | `messages`    | Every message, newest first (`--limit`, `--from`, `--unread`, `--since`) |
 | `messages <message-id>` | A single message in full                                    |
-| `messages attachment <message-id> <attachment-id>` | Download an attachment |
+| `messages <message-id> --attachments [<attachment-id>...]` | Download all (or the listed) attachments of a message |
 
 `behaviour` lists each event with its type, points, subject or class, teacher,
 description and outcome. The year call only has type and points, so the rest
@@ -168,7 +168,8 @@ The config file lives at `$XDG_CONFIG_HOME/my-child-at-school-cli/config.yaml`
 every sender in one flat list, always newest first (ties on date go to the
 higher message ID). `messages <message-id>` opens one message in full,
 including any links found in the body and attachment metadata; `messages
-attachment <message-id> <attachment-id>` downloads one attachment.
+<message-id> --attachments` downloads all of its attachments, or only those
+whose ids follow it (`messages <message-id> --attachments 481 482`).
 
 The list can be filtered and combined:
 
@@ -197,10 +198,25 @@ Downloaded attachments are saved under their own name (e.g.
 permissioned, the way a browser download would be. If a file with that name
 already exists there, the next free name is used instead - `Lockdown
 Procedure Practice (1).pdf`, `(2).pdf`, and so on - so nothing already on
-disk is ever silently overwritten. Pass `-o`/`--out` to `messages attachment`
-to save somewhere else: an existing directory saves the attachment inside it
-with the same de-duplication, while any other path is treated as an exact
-file name and is always (over)written.
+disk is ever silently overwritten. Pass `-o`/`--out` (only valid with
+`--attachments`) to save somewhere else. With one file, an existing directory
+saves it inside with the same de-duplication, while any other path is treated
+as an exact file name and is always (over)written. With more than one file,
+`-o` must be a directory: a path that doesn't exist yet is created, and a
+path to an existing file is an error.
+
+All requested ids are checked against the message before anything is
+downloaded, so a typo never leaves a partial result. If a download fails
+part-way, the command stops with an `api_error` and files already saved are
+kept. Text output prints one `Saved ... to ...` line per file; `--output
+json` returns an array of `{message_id, attachment_id, file_name, path}`.
+
+MCAS stores attachment names with stray whitespace (runs of spaces, spaces
+before the extension) that the website hides. The CLI normalises names once
+when reading them: whitespace runs collapse to a single space, the ends are
+trimmed, and spaces before the final extension are removed
+(`Year 10 Induction Evening    .pdf` becomes `Year 10 Induction Evening.pdf`).
+Everything else in the name is left as is.
 
 ## Known limitations
 
