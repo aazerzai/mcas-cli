@@ -25,11 +25,28 @@ var (
 	messagesSince  string
 )
 
+var (
+	messagesAttachments bool
+	messagesOut         string
+)
+
 var messagesCmd = &cobra.Command{
-	Use:   "messages [message-id]",
+	Use:   "messages [message-id] [--attachments [attachment-id...]]",
 	Short: "Show messages from teachers and the school, newest first",
-	Args:  cobra.MaximumNArgs(1),
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if messagesAttachments {
+			if len(args) == 0 {
+				return fmt.Errorf("--attachments needs a message id")
+			}
+			return runMessageAttachmentsCmd(cmd, args)
+		}
+		if cmd.Flags().Changed("out") {
+			return fmt.Errorf("-o/--out can only be used with --attachments")
+		}
+		if len(args) > 1 {
+			return fmt.Errorf("unexpected argument %q: pass --attachments to download attachments", args[1])
+		}
 		if len(args) == 1 {
 			return runMessageByID(cmd, args[0])
 		}
@@ -37,22 +54,13 @@ var messagesCmd = &cobra.Command{
 	},
 }
 
-var messagesAttachmentOut string
-
-var messagesAttachmentCmd = &cobra.Command{
-	Use:   "attachment <message-id> <attachment-id>",
-	Short: "Download a message attachment",
-	Args:  cobra.ExactArgs(2),
-	RunE:  runMessagesAttachment,
-}
-
 func init() {
 	messagesCmd.Flags().IntVar(&messagesLimit, "limit", 0, "show at most N messages, applied after filtering (default: all)")
 	messagesCmd.Flags().IntVar(&messagesFrom, "from", 0, "only messages from this recipient id")
 	messagesCmd.Flags().BoolVar(&messagesUnread, "unread", false, "only unread messages")
 	messagesCmd.Flags().StringVar(&messagesSince, "since", "", "only messages on or after this date, YYYY-MM-DD (local time)")
-	messagesAttachmentCmd.Flags().StringVarP(&messagesAttachmentOut, "out", "o", "", "file or directory to save the attachment to (default: current directory)")
-	messagesCmd.AddCommand(messagesAttachmentCmd)
+	messagesCmd.Flags().BoolVar(&messagesAttachments, "attachments", false, "download attachments of a message; ids after the message id select specific ones (default: all)")
+	messagesCmd.Flags().StringVarP(&messagesOut, "out", "o", "", "with --attachments: directory (or, for one file, file path) to save to (default: current directory)")
 	rootCmd.AddCommand(messagesCmd)
 }
 
@@ -144,15 +152,22 @@ func runMessagesList(cmd *cobra.Command) error {
 	return output.Result(os.Stdout, format, "messages", messages, renderInboxMessagesText)
 }
 
+func rejectListFlags(cmd *cobra.Command) error {
+	for _, name := range []string{"limit", "from", "unread", "since"} {
+		if cmd.Flags().Changed(name) {
+			return fmt.Errorf("--%s can't be used with a message id", name)
+		}
+	}
+	return nil
+}
+
 // runMessageByID looks up a single message. List flags are rejected here
 // (rather than silently ignored) before the id itself is validated, since
 // whether a positional argument was given at all - not whether it parses -
 // is what puts the command in id mode.
 func runMessageByID(cmd *cobra.Command, arg string) error {
-	for _, name := range []string{"limit", "from", "unread", "since"} {
-		if cmd.Flags().Changed(name) {
-			return fmt.Errorf("--%s can't be used with a message id", name)
-		}
+	if err := rejectListFlags(cmd); err != nil {
+		return err
 	}
 	messageID, err := strconv.Atoi(arg)
 	if err != nil {
@@ -192,16 +207,36 @@ func runMessageByID(cmd *cobra.Command, arg string) error {
 	return output.Result(os.Stdout, format, "messages", message, renderInboxMessageText)
 }
 
-func runMessagesAttachment(cmd *cobra.Command, args []string) error {
+// runMessageAttachmentsCmd validates the positional arguments (message id
+// followed by optional attachment ids) and hands off to runMessageAttachments.
+func runMessageAttachmentsCmd(cmd *cobra.Command, args []string) error {
+	if err := rejectListFlags(cmd); err != nil {
+		return err
+	}
 	messageID, err := strconv.Atoi(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid message id %q: want an integer", args[0])
 	}
-	attachmentID, err := strconv.Atoi(args[1])
-	if err != nil {
-		return fmt.Errorf("invalid attachment id %q: want an integer", args[1])
+	var attachmentIDs []int
+	seen := map[int]bool{}
+	for _, arg := range args[1:] {
+		id, err := strconv.Atoi(arg)
+		if err != nil {
+			return fmt.Errorf("invalid attachment id %q: want an integer", arg)
+		}
+		if !seen[id] {
+			seen[id] = true
+			attachmentIDs = append(attachmentIDs, id)
+		}
 	}
+	return runMessageAttachments(messageID, attachmentIDs)
+}
 
+// runMessageAttachments downloads the given attachments of a message, or all
+// of them when attachmentIDs is empty. Everything is validated before the
+// first download, so a typo never leaves a partial result.
+func runMessageAttachments(messageID int, attachmentIDs []int) error {
+	const command = "messages"
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -212,9 +247,8 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 	}
 	creds, err := cfg.ResolveCredentials(flagEmail, flagPassword)
 	if err != nil {
-		return emitFailure(format, "messages attachment", output.AuthErrorType, err)
+		return emitFailure(format, command, output.AuthErrorType, err)
 	}
-
 	cacheDir, err := cfg.CacheDir()
 	if err != nil {
 		return err
@@ -225,67 +259,111 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 	}
 
 	// The attachment download call itself reports no filename, so the
-	// conversations listing has to be consulted first to name the file.
+	// conversations listing has to be consulted first to name the files.
 	conversations, err := loadConversations(c, creds)
 	if err != nil {
-		return emitFailure(format, "messages attachment", classifyError(err), err)
+		return emitFailure(format, command, classifyError(err), err)
+	}
+	message, err := mcas.FindMessage(conversations, messageID)
+	if err != nil {
+		return emitFailure(format, command, classifyError(err), err)
+	}
+	if len(message.Attachments) == 0 {
+		return emitFailure(format, command, output.APIErrorType, fmt.Errorf("message %d has no attachments", messageID))
 	}
 
-	fileName := findAttachmentFileName(conversations, messageID, attachmentID)
-	if fileName == "" {
-		err := fmt.Errorf("no attachment %d on message %d", attachmentID, messageID)
-		return emitFailure(format, "messages attachment", output.APIErrorType, err)
+	selected := message.Attachments
+	if len(attachmentIDs) > 0 {
+		selected = nil
+		for _, id := range attachmentIDs {
+			found := false
+			for _, a := range message.Attachments {
+				if a.ID == id {
+					selected = append(selected, a)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return emitFailure(format, command, output.APIErrorType, fmt.Errorf("no attachment %d on message %d", id, messageID))
+			}
+		}
+	}
+
+	if len(selected) > 1 && messagesOut != "" {
+		if err := prepareOutDir(messagesOut, len(selected)); err != nil {
+			return err
+		}
 	}
 
 	client := mcas.New(creds)
 	if err := client.Login(); err != nil {
-		return emitFailure(format, "messages attachment", classifyError(err), err)
-	}
-	data, err := client.MessageAttachmentData(messageID, attachmentID)
-	if err != nil {
-		return emitFailure(format, "messages attachment", classifyError(err), err)
+		return emitFailure(format, command, classifyError(err), err)
 	}
 
-	// Only claim the destination path once the download has actually
-	// succeeded, so a failed login/fetch never truncates an existing -o file
-	// or leaves a 0-byte stub behind.
-	destPath, err := resolveAttachmentPath(messagesAttachmentOut, fileName)
-	if err != nil {
+	results := make([]attachmentResult, 0, len(selected))
+	for _, a := range selected {
+		result, err := downloadAttachment(client, messageID, a)
+		if err != nil {
+			if len(selected) > 1 {
+				err = fmt.Errorf("downloaded %d of %d; attachment %d failed: %w", len(results), len(selected), a.ID, err)
+			}
+			return emitFailure(format, command, output.APIErrorType, err)
+		}
+		results = append(results, result)
+	}
+	return output.Result(os.Stdout, format, command, results, renderAttachmentResultsText)
+}
+
+// prepareOutDir makes sure -o is usable as a directory for several files:
+// an existing directory is kept, a missing path is created, and an existing
+// non-directory is an error.
+func prepareOutDir(out string, count int) error {
+	info, err := os.Stat(out)
+	switch {
+	case err == nil && !info.IsDir():
+		return fmt.Errorf("-o must be a directory when downloading %d attachments", count)
+	case err == nil:
+		return nil
+	case os.IsNotExist(err):
+		return os.MkdirAll(out, 0o700)
+	default:
 		return err
+	}
+}
+
+// downloadAttachment fetches one attachment and saves it. The destination is
+// only claimed once the download has succeeded, so a failed fetch never
+// truncates an existing -o file or leaves a 0-byte stub behind.
+func downloadAttachment(client *mcas.Client, messageID int, a mcas.MessageAttachment) (attachmentResult, error) {
+	data, err := client.MessageAttachmentData(messageID, a.ID)
+	if err != nil {
+		return attachmentResult{}, err
+	}
+	destPath, err := resolveAttachmentPath(messagesOut, a.FileName)
+	if err != nil {
+		return attachmentResult{}, err
 	}
 	if err := os.WriteFile(destPath, data, 0o600); err != nil {
-		return err
+		return attachmentResult{}, err
 	}
-
-	result := attachmentResult{Path: destPath, FileName: fileName}
-	return output.Result(os.Stdout, format, "messages attachment", result, renderAttachmentResultText)
+	return attachmentResult{MessageID: messageID, AttachmentID: a.ID, FileName: a.FileName, Path: destPath}, nil
 }
 
 type attachmentResult struct {
-	Path     string `json:"path"`
-	FileName string `json:"file_name"`
+	MessageID    int    `json:"message_id"`
+	AttachmentID int    `json:"attachment_id"`
+	FileName     string `json:"file_name"`
+	Path         string `json:"path"`
 }
 
-func renderAttachmentResultText(w io.Writer, data any) error {
-	r := data.(attachmentResult)
-	_, err := fmt.Fprintf(w, "Saved %s to %s\n", r.FileName, r.Path)
-	return err
-}
-
-func findAttachmentFileName(conversations []mcas.Conversation, messageID, attachmentID int) string {
-	for _, conv := range conversations {
-		for _, m := range conv.Messages {
-			if m.ID != messageID {
-				continue
-			}
-			for _, a := range m.Attachments {
-				if a.ID == attachmentID {
-					return a.FileName
-				}
-			}
+func renderAttachmentResultsText(w io.Writer, data any) error {
+	for _, r := range data.([]attachmentResult) {
+		if _, err := fmt.Fprintf(w, "Saved %s to %s\n", r.FileName, r.Path); err != nil {
+			return err
 		}
 	}
-	return ""
+	return nil
 }
 
 // sanitizeFileName strips path separators and control characters from a
@@ -442,7 +520,12 @@ func renderInboxMessageText(w io.Writer, data any) error {
 			return err
 		}
 		for _, a := range m.Attachments {
-			if _, err := fmt.Fprintf(w, " - [%d] %s   (mcas messages attachment %d %d)\n", a.ID, a.FileName, m.ID, a.ID); err != nil {
+			if _, err := fmt.Fprintf(w, " - [%d] %s   (mcas messages %d --attachments %d)\n", a.ID, a.FileName, m.ID, a.ID); err != nil {
+				return err
+			}
+		}
+		if len(m.Attachments) > 1 {
+			if _, err := fmt.Fprintf(w, "Download all: mcas messages %d --attachments\n", m.ID); err != nil {
 				return err
 			}
 		}

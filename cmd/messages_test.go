@@ -175,25 +175,28 @@ func TestResolveAttachmentPathSanitizesHostileFileName(t *testing.T) {
 	}
 }
 
-func TestFindAttachmentFileName(t *testing.T) {
-	conversations := []mcas.Conversation{
-		{
-			RecipientID: 508,
-			Messages: []mcas.Message{
-				{
-					ID: 1001,
-					Attachments: []mcas.MessageAttachment{
-						{ID: 52, FileName: "letter.pdf"},
-					},
-				},
-			},
-		},
+func TestPrepareOutDir(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := prepareOutDir(dir, 2); err != nil {
+		t.Errorf("prepareOutDir(existing dir) error = %v", err)
 	}
-	if got := findAttachmentFileName(conversations, 1001, 52); got != "letter.pdf" {
-		t.Errorf("findAttachmentFileName() = %q, want letter.pdf", got)
+
+	created := filepath.Join(dir, "letters")
+	if err := prepareOutDir(created, 2); err != nil {
+		t.Fatalf("prepareOutDir(missing) error = %v", err)
 	}
-	if got := findAttachmentFileName(conversations, 1001, 999); got != "" {
-		t.Errorf("findAttachmentFileName() = %q, want empty for an unknown attachment id", got)
+	if info, err := os.Stat(created); err != nil || !info.IsDir() {
+		t.Errorf("prepareOutDir(missing) did not create a directory: %v", err)
+	}
+
+	file := filepath.Join(dir, "existing.pdf")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := prepareOutDir(file, 2)
+	if err == nil || !strings.Contains(err.Error(), "-o must be a directory when downloading 2 attachments") {
+		t.Errorf("prepareOutDir(file) error = %v, want a must-be-a-directory error", err)
 	}
 }
 
@@ -373,7 +376,7 @@ func TestRenderInboxMessageTextIncludesAttachmentCommand(t *testing.T) {
 		"Subject:   Weekly Newsletter - 01.05.25",
 		"Dear Parent, Carer of ...",
 		"https://sway.cloud.microsoft/abc",
-		"mcas messages attachment 41206 52",
+		"mcas messages 41206 --attachments 52",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)

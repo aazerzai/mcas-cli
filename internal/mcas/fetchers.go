@@ -6,11 +6,29 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
+
+// normalizeFileName tidies the irregular whitespace MCAS stores in attachment
+// names (the website hides it because browsers collapse whitespace in HTML):
+// every whitespace run becomes one space, the ends are trimmed, and spaces
+// directly before the final extension are dropped. If nothing is left, the
+// original name is returned unchanged.
+func normalizeFileName(name string) string {
+	cleaned := strings.Join(strings.FieldsFunc(name, unicode.IsSpace), " ")
+	if ext := filepath.Ext(cleaned); ext != "" && ext != cleaned {
+		cleaned = strings.TrimRight(strings.TrimSuffix(cleaned, ext), " ") + ext
+	}
+	if cleaned == "" {
+		return name
+	}
+	return cleaned
+}
 
 // EnsureSession re-logs in if no session has been established yet.
 func (c *Client) EnsureSession() error { return c.ensureSession() }
@@ -512,7 +530,7 @@ func (c *Client) Conversations() ([]Conversation, error) {
 	for _, a := range payload.MessageAttachments {
 		attachmentsByMessage[a.MessageID] = append(attachmentsByMessage[a.MessageID], MessageAttachment{
 			ID:       a.AttachmentID,
-			FileName: a.FileName,
+			FileName: normalizeFileName(a.FileName),
 		})
 	}
 
