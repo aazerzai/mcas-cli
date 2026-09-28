@@ -44,3 +44,7 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
 
+      - name: Show execution transcript
+        if: always()
+        run: cat /home/runner/work/_temp/claude-execution-output.json
+
