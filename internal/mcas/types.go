@@ -169,3 +169,17 @@ type MessageAttachment struct {
 	ID       int    `json:"id"`
 	FileName string `json:"file_name"`
 }
+
+// InboxMessage is one message with its sender inlined, for flat listing.
+type InboxMessage struct {
+	ID            int                 `json:"id"`
+	RecipientID   int                 `json:"recipient_id"`
+	RecipientName string              `json:"recipient_name,omitempty"` // can be empty for the school itself
+	Subject       string              `json:"subject"`
+	Body          string              `json:"body"`
+	Date          time.Time           `json:"date"`
+	Sent          bool                `json:"sent"` // false: from the school/teacher, true: sent by the parent
+	Read          bool                `json:"read"`
+	Links         []string            `json:"links,omitempty"`
+	Attachments   []MessageAttachment `json:"attachments,omitempty"`
+}

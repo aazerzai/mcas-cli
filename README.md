@@ -74,8 +74,8 @@ go run . attendance
 | `detentions`  | Recorded detentions                                                   |
 | `reports`     | Published school reports                                              |
 | `clubs`       | Clubs and trips the pupil is enrolled on                              |
-| `messages`    | Message threads from teachers and the school                         |
-| `messages show <recipient-id>` | Full message thread with one sender                  |
+| `messages`    | Every message, newest first (`--limit`, `--from`, `--unread`, `--since`) |
+| `messages <message-id>` | A single message in full                                    |
 | `messages attachment <message-id> <attachment-id>` | Download an attachment |
 
 Global flags (available on every command):
@@ -156,10 +156,29 @@ The config file lives at `$XDG_CONFIG_HOME/my-child-at-school-cli/config.yaml`
 
 ## Messages
 
-`messages` lists every message thread from teachers and the school;
-`messages show <recipient-id>` shows one thread in full, including any
-links found in the message body and attachment metadata; `messages
+`messages` addresses by message, not by thread: it lists every message from
+every sender in one flat list, always newest first (ties on date go to the
+higher message ID). `messages <message-id>` opens one message in full,
+including any links found in the body and attachment metadata; `messages
 attachment <message-id> <attachment-id>` downloads one attachment.
+
+The list can be filtered and combined:
+
+```sh
+$ mcas messages --limit 3
+$ mcas messages --from 508 --since 2026-09-01
+$ mcas messages --unread
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--limit N` | `0` (all) | Show at most N messages, applied after filtering |
+| `--from <recipient-id>` | (none) | Only messages from that sender |
+| `--unread` | `false` | Only unread messages |
+| `--since YYYY-MM-DD` | (none) | Messages on or after this date, local time |
+
+These list flags can't be combined with a message ID - open a single
+message, then filter separately to browse a sender's other messages.
 
 MCAS returns the whole inbox in a single call - there is no pagination to
 page through, and reading messages never marks them read on the server
