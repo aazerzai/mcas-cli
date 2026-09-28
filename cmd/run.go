@@ -55,6 +55,14 @@ func fetchCached[T any](c *cache.Cache, key string, force bool, fetch func() (T,
 // and call fetch on a cache miss, then render the result (or failure) in
 // the requested format.
 func runCommand[T any](name, cacheKeyExtra string, fetch func(client *mcas.Client) (T, error), render output.TextRenderer) error {
+	return runCommandThen(name, cacheKeyExtra, fetch, func(v T) (T, error) { return v, nil }, render)
+}
+
+// runCommandThen is runCommand with a transform applied to the (possibly
+// cached) fetched value before rendering, so a command can cache one
+// payload and present a view of it. A transform error is reported like any
+// other failure.
+func runCommandThen[T, R any](name, cacheKeyExtra string, fetch func(client *mcas.Client) (T, error), transform func(T) (R, error), render output.TextRenderer) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -91,7 +99,12 @@ func runCommand[T any](name, cacheKeyExtra string, fetch func(client *mcas.Clien
 		return emitFailure(format, name, classifyError(err), err)
 	}
 
-	if err := output.Result(os.Stdout, format, name, data, render); err != nil {
+	view, err := transform(data)
+	if err != nil {
+		return emitFailure(format, name, classifyError(err), err)
+	}
+
+	if err := output.Result(os.Stdout, format, name, view, render); err != nil {
 		return err
 	}
 	return nil

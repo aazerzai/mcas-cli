@@ -69,6 +69,7 @@ go run . attendance
 | `logout`      | Remove stored credentials from the OS keychain                        |
 | `attendance`  | Registration marks for a day (`--date YYYY-MM-DD`, default: today)    |
 | `behaviour`   | Behaviour points/events for the academic year, or a day with `--date` |
+| `calendar`    | School academic calendar summary, or a day's type with `--date`       |
 | `timetable`   | This week's timetable                                                 |
 | `dinner`      | Dinner money credit balance                                           |
 | `detentions`  | Recorded detentions                                                   |
@@ -77,6 +78,11 @@ go run . attendance
 | `messages`    | Every message, newest first (`--limit`, `--from`, `--unread`, `--since`) |
 | `messages <message-id>` | A single message in full                                    |
 | `messages attachment <message-id> <attachment-id>` | Download an attachment |
+
+`calendar` is sourced from the behaviour module's data (MCAS only exposes the
+academic calendar there), so it reports an error if the school hasn't enabled
+the Behaviour module. `behaviour --output json` no longer includes a
+`calendar` key; use `calendar --output json` (a sorted `days` array) instead.
 
 Global flags (available on every command):
 

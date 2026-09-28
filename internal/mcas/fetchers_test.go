@@ -52,16 +52,59 @@ func TestBehaviourYearComputesPointsAndMapsSubjects(t *testing.T) {
 	if year.Events[0].Subject != "Music" {
 		t.Errorf("newest event subject = %q, want Music", year.Events[0].Subject)
 	}
-	wantCalendar := map[string]DayType{
-		"2026-09-11": SchoolDay,
-		"2026-09-12": Weekend,
-		"2026-09-14": Holiday,
-		"2026-09-15": StaffDay,
+}
+
+// TestCalendarDecodesAndSortsDays covers the calendar split out of
+// BehaviourYear: DayStatusCode decoding, date truncation, sorting, and an
+// unmapped code falling through to Unknown.
+func TestCalendarDecodesAndSortsDays(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": "{\"Table\":[],\"Table1\":[` +
+			`{\"Day\":\"2026-09-15T00:00:00\",\"DayStatusCode\":\"$\"},` +
+			`{\"Day\":\"2026-09-11T00:00:00\",\"DayStatusCode\":\"-\"},` +
+			`{\"Day\":\"2026-09-12T00:00:00\",\"DayStatusCode\":\"*\"},` +
+			`{\"Day\":\"2026-09-14T00:00:00\",\"DayStatusCode\":\"#\"},` +
+			`{\"Day\":\"2026-09-16T00:00:00\",\"DayStatusCode\":\"?\"}` +
+			`],\"Table2\":[{\"YearName\":\"2026/2027\"}]}"}`))
+	})
+	client.session = Session{StudentID: 99999, YearID: 40000}
+
+	cal, err := client.Calendar()
+	if err != nil {
+		t.Fatalf("Calendar() error = %v", err)
 	}
-	for date, want := range wantCalendar {
-		if got := year.Calendar[date]; got != want {
-			t.Errorf("Calendar[%q] = %q, want %q", date, got, want)
+	if cal.YearName != "2026/2027" {
+		t.Errorf("YearName = %q, want 2026/2027", cal.YearName)
+	}
+	want := []CalendarDay{
+		{"2026-09-11", SchoolDay},
+		{"2026-09-12", Weekend},
+		{"2026-09-14", Holiday},
+		{"2026-09-15", StaffDay},
+		{"2026-09-16", Unknown},
+	}
+	if len(cal.Days) != len(want) {
+		t.Fatalf("got %d days, want %d", len(cal.Days), len(want))
+	}
+	for i, d := range want {
+		if cal.Days[i] != d {
+			t.Errorf("Days[%d] = %+v, want %+v", i, cal.Days[i], d)
 		}
+	}
+}
+
+// TestCalendarErrorsWhenEmpty: no Table1 rows means the Behaviour module
+// isn't providing a calendar, which is reported rather than returned empty.
+func TestCalendarErrorsWhenEmpty(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"d": "{\"Table\":[],\"Table1\":[]}"}`))
+	})
+	client.session = Session{StudentID: 99999, YearID: 40000}
+
+	_, err := client.Calendar()
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Calendar() error = %v, want *APIError", err)
 	}
 }
 
