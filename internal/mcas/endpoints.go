@@ -25,6 +25,11 @@ const (
 	epConfigurations  = "api/v1/mcas/configurations"
 	epReports         = "api/v1/studentDetails/reports/%d"
 	epClubs           = "api/v1/mcas/clubsandtrips/StudentClubsAndTrips/%d"
+	// Messages - keyed by the parent's own user id (Session.UserID), not the
+	// student id every other route above uses. Grouped by sender, with no
+	// pagination: MCAS returns the whole inbox in one call.
+	epConversations     = "api/v1/person/%d/conversations"
+	epMessageAttachment = "api/v1/person/%d/messages/%d/attachments/%d"
 )
 
 // moduleFlags maps a module name to the configuration key that reports

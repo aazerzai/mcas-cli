@@ -18,6 +18,7 @@ var (
 	masterVarRE   = regexp.MustCompile(`var\s+(master_[A-Za-z]+)\s*=\s*"?([^";\n]{0,80})`)
 	dayHeaderRE   = regexp.MustCompile(`([A-Z][a-z]+)\s*(\d{1,2})(?:st|nd|rd|th)?\s*([A-Z][a-z]{2})`)
 	balanceRE     = regexp.MustCompile(`£\s*(-?[\d,]+\.\d{2})`)
+	messageLinkRE = regexp.MustCompile(`(?i)\b(?:https?://|www\.)\S+`)
 )
 
 // hiddenFields scrapes every <input type="hidden"> field from a WebForms
@@ -48,6 +49,7 @@ type dashboardContext struct {
 	SchoolID    int
 	SchoolName  string
 	StudentName string
+	UserID      int
 }
 
 // readDashboardContext pulls ids and the pupil name off the dashboard HTML.
@@ -68,6 +70,10 @@ func readDashboardContext(pageHTML string) dashboardContext {
 			}
 		case "master_schoolName":
 			ctx.SchoolName = m[2]
+		case "master_userid":
+			if n, err := strconv.Atoi(strings.TrimSpace(m[2])); err == nil {
+				ctx.UserID = n
+			}
 		}
 	}
 	if m := studentNameRE.FindStringSubmatch(pageHTML); m != nil {
@@ -367,6 +373,32 @@ func parseDinnerBalance(fragment string) (float64, bool) {
 		return 0, false
 	}
 	return amount, true
+}
+
+// extractLinks pulls bare URLs out of a message body. MCAS message bodies
+// are plain text with unlinked URLs, not HTML anchors, so a regex is enough
+// - trailing sentence punctuation is trimmed since it isn't part of the URL.
+func extractLinks(body string) []string {
+	matches := messageLinkRE.FindAllString(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	links := make([]string, 0, len(matches))
+	for _, m := range matches {
+		links = append(links, strings.TrimRight(m, ".,)"))
+	}
+	return links
+}
+
+// parseMessageDate parses MCAS's ISO-8601 message timestamps, whose
+// fractional-second precision varies between messages (".9"/".99"/".999"
+// observed) rather than being fixed-width.
+func parseMessageDate(s string) time.Time {
+	if t, err := time.Parse("2006-01-02T15:04:05.999999999", s); err == nil {
+		return t
+	}
+	t, _ := time.Parse("2006-01-02T15:04:05", s)
+	return t
 }
 
 // sortEventsNewestFirst orders behaviour events most-recent-first.

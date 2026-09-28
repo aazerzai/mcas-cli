@@ -1,6 +1,7 @@
 package mcas
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -355,4 +356,115 @@ func (c *Client) DinnerBalance() (*DinnerBalance, error) {
 		return nil, nil
 	}
 	return &DinnerBalance{Amount: amount, Currency: "GBP"}, nil
+}
+
+type conversationRow struct {
+	RecipientID         int          `json:"RecipientID"`
+	RecipientName       string       `json:"RecipientName"`
+	UnreadCount         int          `json:"UnreadCount"`
+	PublishedDocumentID *int         `json:"PublishedDocumentID"`
+	Messages            []messageRow `json:"Messages"`
+}
+
+type messageRow struct {
+	MessageID   int    `json:"MessageID"`
+	Subject     string `json:"Subject"`
+	Message     string `json:"Message"`
+	MessageDate string `json:"MessageDate"`
+	Mode        int    `json:"Mode"` // 0: from the school/teacher, 1: sent by the parent
+	IsRead      bool   `json:"IsRead"`
+}
+
+type attachmentRow struct {
+	AttachmentID int    `json:"AttachmentID"`
+	FileName     string `json:"FileName"`
+	MessageID    int    `json:"MessageID"`
+}
+
+type conversationsPayload struct {
+	Conversations      []conversationRow `json:"Conversations"`
+	MessageAttachments []attachmentRow   `json:"MessageAttachments"`
+}
+
+// Conversations fetches every teacher/school message thread, grouped by
+// sender, with attachments joined onto their message and links extracted
+// from the plain-text body. MCAS returns the whole inbox in a single call -
+// there is no pagination.
+func (c *Client) Conversations() ([]Conversation, error) {
+	raw, err := c.get(fmt.Sprintf(epConversations, c.session.UserID))
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	var payload conversationsPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, nil
+	}
+
+	attachmentsByMessage := map[int][]MessageAttachment{}
+	for _, a := range payload.MessageAttachments {
+		attachmentsByMessage[a.MessageID] = append(attachmentsByMessage[a.MessageID], MessageAttachment{
+			ID:       a.AttachmentID,
+			FileName: a.FileName,
+		})
+	}
+
+	conversations := make([]Conversation, 0, len(payload.Conversations))
+	for _, row := range payload.Conversations {
+		messages := make([]Message, 0, len(row.Messages))
+		for _, m := range row.Messages {
+			messages = append(messages, Message{
+				ID:          m.MessageID,
+				Subject:     m.Subject,
+				Body:        m.Message,
+				Date:        parseMessageDate(m.MessageDate),
+				Sent:        m.Mode == 1,
+				Read:        m.IsRead,
+				Links:       extractLinks(m.Message),
+				Attachments: attachmentsByMessage[m.MessageID],
+			})
+		}
+		conversations = append(conversations, Conversation{
+			RecipientID:         row.RecipientID,
+			RecipientName:       row.RecipientName,
+			UnreadCount:         row.UnreadCount,
+			PublishedDocumentID: row.PublishedDocumentID,
+			Messages:            messages,
+		})
+	}
+	return conversations, nil
+}
+
+// Conversation fetches the full message thread with one sender.
+func (c *Client) Conversation(recipientID int) (*Conversation, error) {
+	conversations, err := c.Conversations()
+	if err != nil {
+		return nil, err
+	}
+	for i := range conversations {
+		if conversations[i].RecipientID == recipientID {
+			return &conversations[i], nil
+		}
+	}
+	return nil, &APIError{Message: fmt.Sprintf("no message thread found with recipient id %d", recipientID)}
+}
+
+// MessageAttachmentData downloads and decodes one attachment's raw bytes.
+// This call reports no filename or content type - just the base64 body -
+// so callers need Conversations()'s MessageAttachment.FileName for that.
+func (c *Client) MessageAttachmentData(messageID, attachmentID int) ([]byte, error) {
+	raw, err := c.get(fmt.Sprintf(epMessageAttachment, c.session.UserID, messageID, attachmentID))
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, &APIError{Message: fmt.Sprintf("attachment %d on message %d not found", attachmentID, messageID)}
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, &APIError{Message: "decoding attachment: " + err.Error()}
+	}
+	return data, nil
 }
