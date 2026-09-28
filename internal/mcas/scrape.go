@@ -177,11 +177,10 @@ func parseDayHeader(header string, today time.Time) (string, *time.Time) {
 }
 
 // parseBehaviourHTML reads the per-day behaviour events table. MCAS returns
-// this view as an HTML fragment rather than JSON, and carries free-text
-// columns (e.g. a human-readable event level) that the year-wide JSON call
-// doesn't expose, so rows are kept as loosely-typed maps rather than a
-// fixed struct.
-func parseBehaviourHTML(fragment string) []map[string]string {
+// this view as an HTML fragment rather than JSON. The positive/negative
+// marker is only an icon class in the Event cell (fa-check-circle /
+// fa-times-circle), so it is read from there.
+func parseBehaviourHTML(fragment string) []BehaviourDayEvent {
 	if strings.TrimSpace(fragment) == "" {
 		return nil
 	}
@@ -190,29 +189,23 @@ func parseBehaviourHTML(fragment string) []map[string]string {
 		return nil
 	}
 	var headers []string
-	var rows [][]string
+	var rows [][]*html.Node
 	var walk func(*html.Node, bool)
-	inHead := false
-	walk = func(n *html.Node, inBody bool) {
+	walk = func(n *html.Node, inHead bool) {
 		if n.Type == html.ElementNode {
 			switch n.Data {
 			case "thead":
 				inHead = true
-				for c := n.FirstChild; c != nil; c = c.NextSibling {
-					walk(c, inBody)
-				}
-				inHead = false
-				return
 			case "th":
 				if inHead {
-					headers = append(headers, textContent(n))
+					headers = append(headers, strings.ToLower(textContent(n)))
 				}
 			case "tr":
 				if !inHead {
-					var cells []string
+					var cells []*html.Node
 					for c := n.FirstChild; c != nil; c = c.NextSibling {
 						if c.Type == html.ElementNode && c.Data == "td" {
-							cells = append(cells, textContent(c))
+							cells = append(cells, c)
 						}
 					}
 					if len(cells) > 0 {
@@ -222,26 +215,64 @@ func parseBehaviourHTML(fragment string) []map[string]string {
 			}
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c, inBody)
+			walk(c, inHead)
 		}
 	}
 	walk(doc, false)
 
-	events := make([]map[string]string, 0, len(rows))
+	events := make([]BehaviourDayEvent, 0, len(rows))
 	for _, cells := range rows {
-		row := map[string]string{}
-		if len(headers) > 0 {
-			for i, cell := range cells {
-				if i < len(headers) {
-					row[headers[i]] = cell
-				}
-			}
-		} else {
-			row["Event"] = cells[len(cells)-1]
+		var ev BehaviourDayEvent
+		if len(headers) == 0 {
+			last := cells[len(cells)-1]
+			ev.Description, ev.Type = textContent(last), iconEventType(last)
+			events = append(events, ev)
+			continue
 		}
-		events = append(events, row)
+		for i, cell := range cells {
+			if i >= len(headers) {
+				break
+			}
+			text := textContent(cell)
+			switch headers[i] {
+			case "date":
+				if t, err := time.Parse("02/01/2006", text); err == nil {
+					text = t.Format("2006-01-02")
+				}
+				ev.Date = text
+			case "class":
+				ev.Class = text
+			case "teacher":
+				ev.Teacher = text
+			case "event":
+				ev.Description, ev.Type = text, iconEventType(cell)
+			case "outcome":
+				ev.Outcome = text
+			}
+		}
+		events = append(events, ev)
 	}
 	return events
+}
+
+// iconEventType reports the event type shown by an icon inside n, or "" when
+// there is no icon or it isn't one we know.
+func iconEventType(n *html.Node) string {
+	if n.Type == html.ElementNode && n.Data == "i" {
+		class := " " + attr(n, "class") + " "
+		switch {
+		case strings.Contains(class, " fa-times-circle "):
+			return "Negative"
+		case strings.Contains(class, " fa-check-circle "):
+			return "Positive"
+		}
+	}
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if t := iconEventType(c); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // parseTimetableHTML reads the rendered weekly timetable grid. There is no
@@ -404,6 +435,9 @@ func parseMessageDate(s string) time.Time {
 // sortEventsNewestFirst orders behaviour events most-recent-first.
 func sortEventsNewestFirst(events []BehaviourEvent) {
 	sort.SliceStable(events, func(i, j int) bool {
-		return events[i].Date.After(events[j].Date)
+		if !events[i].Date.Equal(events[j].Date) {
+			return events[i].Date.After(events[j].Date)
+		}
+		return events[i].ID > events[j].ID
 	})
 }

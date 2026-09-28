@@ -96,12 +96,31 @@ const (
 type BehaviourEvent struct {
 	ID      int       `json:"id"`
 	Date    time.Time `json:"date"`
-	Type    string    `json:"type"` // "Positive" / "Negative" / "Neutral"
-	Points  int       `json:"points"`
+	Type    string    `json:"type"`   // "Positive" / "Negative" / "Neutral"
+	Points  int       `json:"points"` // signed: the raw MCAS adjustment
 	Subject string    `json:"subject"`
+
+	// Filled from the per-day view (see ApplyDayDetails); empty when that
+	// view couldn't be loaded or didn't line up with the year data.
+	Description string `json:"description,omitempty"`
+	Teacher     string `json:"teacher,omitempty"`
+	Class       string `json:"class,omitempty"`
+	Outcome     string `json:"outcome,omitempty"`
 }
 
-// BehaviourPoints are the point totals for the academic year. The AllTime*
+// BehaviourDayEvent is one row of the per-day behaviour table. The rows carry
+// no ID or time; they come back in the same order as the year call's events.
+type BehaviourDayEvent struct {
+	Date        string `json:"date"` // ISO YYYY-MM-DD
+	Class       string `json:"class"`
+	Teacher     string `json:"teacher"`
+	Description string `json:"description"`
+	Outcome     string `json:"outcome"`
+	Type        string `json:"type"` // "Positive" / "Negative", or "" when the row has no known icon
+}
+
+// BehaviourPoints are the point totals for the academic year. The negative
+// totals (Negative, AllTimeNegative) are absolute values. The AllTime*
 // fields are nil when the school hides that figure (MCAS reports "N/A").
 type BehaviourPoints struct {
 	Total           int  `json:"total"`

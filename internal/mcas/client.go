@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,8 @@ type Client struct {
 	baseURL string
 	creds   Credentials
 	session Session
+
+	loginMu sync.Mutex // serialises re-logins from concurrent requests
 }
 
 // New creates a Client for the given credentials.
@@ -46,6 +49,8 @@ func (c *Client) newRequest(method, url string, body io.Reader) (*http.Request, 
 
 // Login performs the WebForms login and captures the pupil context.
 func (c *Client) Login() error {
+	c.loginMu.Lock()
+	defer c.loginMu.Unlock()
 	loginURL := c.baseURL + loginPath
 
 	getReq, err := c.newRequest(http.MethodGet, loginURL, nil)
@@ -98,12 +103,18 @@ func (c *Client) Login() error {
 	}
 
 	ctx := readDashboardContext(string(respBody))
-	c.session = Session{
+	// A re-login must keep the loaded YearID, and must not rewrite an
+	// unchanged session while other goroutines are reading it.
+	fresh := Session{
 		StudentID:   ctx.StudentID,
 		SchoolID:    ctx.SchoolID,
 		SchoolName:  ctx.SchoolName,
 		StudentName: ctx.StudentName,
 		UserID:      ctx.UserID,
+		YearID:      c.session.YearID,
+	}
+	if fresh != c.session {
+		c.session = fresh
 	}
 	return nil
 }
