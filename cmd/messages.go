@@ -234,11 +234,6 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 		return emitFailure(format, "messages attachment", output.APIErrorType, err)
 	}
 
-	destPath, err := resolveAttachmentPath(messagesAttachmentOut, fileName)
-	if err != nil {
-		return err
-	}
-
 	client := mcas.New(creds)
 	if err := client.Login(); err != nil {
 		return emitFailure(format, "messages attachment", classifyError(err), err)
@@ -246,6 +241,14 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 	data, err := client.MessageAttachmentData(messageID, attachmentID)
 	if err != nil {
 		return emitFailure(format, "messages attachment", classifyError(err), err)
+	}
+
+	// Only claim the destination path once the download has actually
+	// succeeded, so a failed login/fetch never truncates an existing -o file
+	// or leaves a 0-byte stub behind.
+	destPath, err := resolveAttachmentPath(messagesAttachmentOut, fileName)
+	if err != nil {
+		return err
 	}
 	if err := os.WriteFile(destPath, data, 0o600); err != nil {
 		return err
