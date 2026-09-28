@@ -138,7 +138,19 @@ type BehaviourYear struct {
 	YearName string             `json:"year_name"`
 	Events   []BehaviourEvent   `json:"events"`
 	Points   BehaviourPoints    `json:"points"`
-	Calendar map[string]DayType `json:"calendar"` // ISO date -> day type
+}
+
+// CalendarDay is one day of the school's academic calendar.
+type CalendarDay struct {
+	Date string  `json:"date"` // ISO YYYY-MM-DD
+	Type DayType `json:"type"`
+}
+
+// AcademicCalendar is the school's calendar for the academic year, sorted
+// by date.
+type AcademicCalendar struct {
+	YearName string        `json:"year_name"`
+	Days     []CalendarDay `json:"days"`
 }
 
 // Lesson is one timetabled lesson. Date is nil when the year-guessing

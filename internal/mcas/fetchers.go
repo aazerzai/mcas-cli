@@ -178,6 +178,60 @@ type behaviourDetailPayload struct {
 	Table4 json.RawMessage `json:"Table4"`
 }
 
+// behaviourDetail fetches and decodes the year's eventdetails payload, which
+// carries both the behaviour data and the academic calendar. It returns nil
+// for an empty or undecodable payload.
+func (c *Client) behaviourDetail() (*behaviourDetailPayload, error) {
+	if c.session.YearID == 0 {
+		if _, err := c.LoadYearID(); err != nil {
+			return nil, err
+		}
+	}
+	raw, err := c.get(fmt.Sprintf(epBehaviourDetail, c.session.StudentID, c.session.YearID))
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	var payload behaviourDetailPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, nil
+	}
+	return &payload, nil
+}
+
+// Calendar returns the school's academic calendar for the year, sorted by
+// date. MCAS only provides it in the behaviour module's eventdetails
+// payload, so it is unavailable when the school hasn't enabled Behaviour.
+func (c *Client) Calendar() (*AcademicCalendar, error) {
+	payload, err := c.behaviourDetail()
+	if err != nil {
+		return nil, err
+	}
+	if payload == nil || len(payload.Table1) == 0 {
+		return nil, &APIError{Message: "no academic calendar available (the school may not have the Behaviour module enabled)"}
+	}
+	days := make([]CalendarDay, 0, len(payload.Table1))
+	for _, row := range payload.Table1 {
+		day := row.Day
+		if len(day) > 10 {
+			day = day[:10]
+		}
+		dt, ok := dayStatus[row.DayStatusCode]
+		if !ok {
+			dt = Unknown
+		}
+		days = append(days, CalendarDay{Date: day, Type: dt})
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
+	cal := &AcademicCalendar{Days: days}
+	if len(payload.Table2) > 0 {
+		cal.YearName = payload.Table2[0].YearName
+	}
+	return cal, nil
+}
+
 // BehaviourYear fetches the whole academic year's behaviour data in one
 // call: points, events and a subject lookup. Strongly preferred over
 // walking eventstable day by day - it's JSON rather than an HTML fragment,
@@ -190,16 +244,12 @@ func (c *Client) BehaviourYear() (*BehaviourYear, error) {
 			return nil, err
 		}
 	}
-	empty := &BehaviourYear{Calendar: map[string]DayType{}}
-	raw, err := c.get(fmt.Sprintf(epBehaviourDetail, c.session.StudentID, c.session.YearID))
+	empty := &BehaviourYear{}
+	payload, err := c.behaviourDetail()
 	if err != nil {
 		return nil, err
 	}
-	if raw == "" {
-		return empty, nil
-	}
-	var payload behaviourDetailPayload
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+	if payload == nil {
 		return empty, nil
 	}
 
@@ -228,19 +278,6 @@ func (c *Client) BehaviourYear() (*BehaviourYear, error) {
 	}
 	sortEventsNewestFirst(events)
 
-	calendar := map[string]DayType{}
-	for _, row := range payload.Table1 {
-		day := row.Day
-		if len(day) > 10 {
-			day = day[:10]
-		}
-		dt, ok := dayStatus[row.DayStatusCode]
-		if !ok {
-			dt = Unknown
-		}
-		calendar[day] = dt
-	}
-
 	yearName := ""
 	if len(payload.Table2) > 0 {
 		yearName = payload.Table2[0].YearName
@@ -250,7 +287,6 @@ func (c *Client) BehaviourYear() (*BehaviourYear, error) {
 	return &BehaviourYear{
 		YearName: yearName,
 		Events:   events,
-		Calendar: calendar,
 		Points: BehaviourPoints{
 			Total:           positive - absInt(negative),
 			Positive:        positive,

@@ -68,7 +68,8 @@ go run . attendance
 | `login`       | Sign in and store credentials in the OS keychain                      |
 | `logout`      | Remove stored credentials from the OS keychain                        |
 | `attendance`  | Registration marks for a day (`--date YYYY-MM-DD`, default: today)    |
-| `behaviour`   | Behaviour points/events for the academic year, or a day with `--date`; `--limit N` keeps the newest N |
+| `behaviour`   | Behaviour points/events for the academic year, or a day with `--date` |
+| `calendar`    | School academic calendar summary, or a day's type with `--date`       |
 | `timetable`   | This week's timetable                                                 |
 | `dinner`      | Dinner money credit balance                                           |
 | `detentions`  | Recorded detentions                                                   |
@@ -78,13 +79,10 @@ go run . attendance
 | `messages <message-id>` | A single message in full                                    |
 | `messages attachment <message-id> <attachment-id>` | Download an attachment |
 
-`behaviour` lists each event with its type, points, subject or class, teacher,
-description and outcome. The year call only has type and points, so the rest
-is fetched per event day (only for the events shown) and cached; a day that
-can't be loaded or matched is left without those fields, with a warning on
-stderr. Aggregate negative totals (`negative`, `all_time_negative`) are
-absolute values; each event's `points` is signed. `--date` returns a JSON
-array of events (`[]` when there are none).
+`calendar` is sourced from the behaviour module's data (MCAS only exposes the
+academic calendar there), so it reports an error if the school hasn't enabled
+the Behaviour module. `behaviour --output json` no longer includes a
+`calendar` key; use `calendar --output json` (a sorted `days` array) instead.
 
 Global flags (available on every command):
 
