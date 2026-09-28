@@ -74,10 +74,10 @@ func (c *Client) Attendance(day time.Time) (*AttendanceDay, error) {
 	return result, nil
 }
 
-// BehaviourDay fetches behaviour events for one day. MCAS returns this view
-// as an HTML fragment, so rows are kept as loosely-typed maps rather than a
-// fixed struct (see parseBehaviourHTML).
-func (c *Client) BehaviourDay(day time.Time) ([]map[string]string, error) {
+// BehaviourDay fetches the per-day behaviour table for one day. It is the
+// only source of an event's description, teacher, class and outcome; see
+// ApplyDayDetails for joining it to the year's events.
+func (c *Client) BehaviourDay(day time.Time) ([]BehaviourDayEvent, error) {
 	if c.session.YearID == 0 {
 		if _, err := c.LoadYearID(); err != nil {
 			return nil, err
@@ -87,7 +87,67 @@ func (c *Client) BehaviourDay(day time.Time) ([]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseBehaviourHTML(raw), nil
+	fragment, err := unquoteProxyString(raw)
+	if err != nil {
+		return nil, &APIError{Message: "decoding behaviour day: " + err.Error()}
+	}
+	rows := parseBehaviourHTML(fragment)
+	if rows == nil {
+		rows = []BehaviourDayEvent{}
+	}
+	return rows, nil
+}
+
+// ApplyDayDetails copies description, teacher, class and outcome from one
+// day's table rows onto that day's events in events (matched by date, ISO
+// YYYY-MM-DD). The rows carry no ID, so they are paired by position with the
+// day's events in time order (ties by ID), with each row's icon type as a
+// sanity check. On any mismatch nothing is changed and an error says why:
+// blank is better than wrong.
+func ApplyDayDetails(events []BehaviourEvent, day string, rows []BehaviourDayEvent) error {
+	var idx []int
+	for i, e := range events {
+		if e.Date.Format("2006-01-02") == day {
+			idx = append(idx, i)
+		}
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		x, y := events[idx[a]], events[idx[b]]
+		if !x.Date.Equal(y.Date) {
+			return x.Date.Before(y.Date)
+		}
+		return x.ID < y.ID
+	})
+	if len(idx) != len(rows) {
+		return fmt.Errorf("%d events but %d rows", len(idx), len(rows))
+	}
+	for k, i := range idx {
+		if rows[k].Type != "" && rows[k].Type != events[i].Type {
+			return fmt.Errorf("row %d is %s but event %d is %s", k+1, rows[k].Type, events[i].ID, events[i].Type)
+		}
+	}
+	for k, i := range idx {
+		events[i].Description = rows[k].Description
+		events[i].Teacher = rows[k].Teacher
+		events[i].Class = rows[k].Class
+		events[i].Outcome = rows[k].Outcome
+	}
+	return nil
+}
+
+// unquoteProxyString undoes the proxy's double JSON encoding: some routes
+// return a quoted JSON string in "d" rather than the bare value. Bare input
+// is returned unchanged.
+func unquoteProxyString(raw string) (string, error) {
+	payload := strings.TrimSpace(raw)
+	if strings.HasPrefix(payload, `"`) {
+		var unquoted string
+		if err := json.Unmarshal([]byte(payload), &unquoted); err != nil {
+			return "", err
+		}
+		return unquoted, nil
+	}
+	return raw, nil
 }
 
 type behaviourEventRow struct {
@@ -197,7 +257,7 @@ func (c *Client) BehaviourYear() (*BehaviourYear, error) {
 			Negative:        absInt(negative),
 			AllTimeTotal:    asInt(totals["ShowTotalPointsAllTime"]),
 			AllTimePositive: asInt(totals["PositivePointsAllTime"]),
-			AllTimeNegative: asInt(totals["NegativePointsAllTime"]),
+			AllTimeNegative: absPtr(asInt(totals["NegativePointsAllTime"])),
 		},
 	}, nil
 }
@@ -219,6 +279,14 @@ func asInt(v any) *int {
 		return nil
 	}
 	return &n
+}
+
+func absPtr(n *int) *int {
+	if n == nil {
+		return nil
+	}
+	v := absInt(*n)
+	return &v
 }
 
 func absInt(n int) int {
@@ -495,15 +563,11 @@ func (c *Client) MessageAttachmentData(messageID, attachmentID int) ([]byte, err
 	if raw == "" {
 		return nil, &APIError{Message: fmt.Sprintf("attachment %d on message %d not found", attachmentID, messageID)}
 	}
-	payload := strings.TrimSpace(raw)
-	if strings.HasPrefix(payload, `"`) {
-		var unquoted string
-		if err := json.Unmarshal([]byte(payload), &unquoted); err != nil {
-			return nil, &APIError{Message: "decoding attachment: " + err.Error()}
-		}
-		payload = strings.TrimSpace(unquoted)
+	payload, err := unquoteProxyString(raw)
+	if err != nil {
+		return nil, &APIError{Message: "decoding attachment: " + err.Error()}
 	}
-	data, err := base64.StdEncoding.DecodeString(payload)
+	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(payload))
 	if err != nil {
 		return nil, &APIError{Message: "decoding attachment: " + err.Error()}
 	}
