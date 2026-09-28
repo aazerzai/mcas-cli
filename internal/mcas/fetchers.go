@@ -1,0 +1,358 @@
+package mcas
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// EnsureSession re-logs in if no session has been established yet.
+func (c *Client) EnsureSession() error { return c.ensureSession() }
+
+// LoadYearID fetches the current academic YearID, needed by the behaviour
+// endpoints, and caches it on the session.
+func (c *Client) LoadYearID() (int, error) {
+	raw, err := c.get(fmt.Sprintf(epStudentYears, c.session.StudentID))
+	if err != nil {
+		return 0, err
+	}
+	var payload struct {
+		Table []struct {
+			YearID int `json:"YearID"`
+		} `json:"Table"`
+	}
+	if raw != "" {
+		_ = json.Unmarshal([]byte(raw), &payload)
+	}
+	if len(payload.Table) > 0 {
+		c.session.YearID = payload.Table[0].YearID
+	}
+	return c.session.YearID, nil
+}
+
+type attendancePeriodRow struct {
+	PeriodName      string `json:"PeriodName"`
+	MarkSign        string `json:"MarkSign"`
+	MarkMeaning     string `json:"MarkMeaning"`
+	MarkDescription string `json:"MarkDescription"`
+	SubjectName     string `json:"SubjectName"`
+}
+
+// Attendance fetches the registration marks for one day. MCAS serves a
+// single day per call.
+func (c *Client) Attendance(day time.Time) (*AttendanceDay, error) {
+	raw, err := c.get(fmt.Sprintf(epAttendance, c.session.StudentID, day.Year(), int(day.Month()), day.Day()))
+	if err != nil {
+		return nil, err
+	}
+	result := &AttendanceDay{Day: day}
+	if raw == "" {
+		return result, nil
+	}
+	var payload struct {
+		Table []attendancePeriodRow `json:"Table"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return result, nil
+	}
+	result.Periods = make([]AttendancePeriod, 0, len(payload.Table))
+	for _, row := range payload.Table {
+		result.Periods = append(result.Periods, AttendancePeriod{
+			PeriodName:      row.PeriodName,
+			MarkSign:        row.MarkSign,
+			MarkMeaning:     row.MarkMeaning,
+			MarkDescription: row.MarkDescription,
+			SubjectName:     row.SubjectName,
+		})
+	}
+	return result, nil
+}
+
+// BehaviourDay fetches behaviour events for one day. MCAS returns this view
+// as an HTML fragment, so rows are kept as loosely-typed maps rather than a
+// fixed struct (see parseBehaviourHTML).
+func (c *Client) BehaviourDay(day time.Time) ([]map[string]string, error) {
+	if c.session.YearID == 0 {
+		if _, err := c.LoadYearID(); err != nil {
+			return nil, err
+		}
+	}
+	raw, err := c.get(fmt.Sprintf(epBehaviour, c.session.StudentID, c.session.YearID, day.Year(), int(day.Month()), day.Day()))
+	if err != nil {
+		return nil, err
+	}
+	return parseBehaviourHTML(raw), nil
+}
+
+type behaviourEventRow struct {
+	EventDate     string `json:"EventDate"`
+	EventType     string `json:"EventType"`
+	Adjustment    int    `json:"Adjustment"`
+	SubjectID     int    `json:"SubjectID"`
+	EventRecordID int    `json:"EventRecordID"`
+}
+
+type calendarRow struct {
+	Day           string `json:"Day"`
+	DayStatusCode string `json:"DayStatusCode"`
+}
+
+type subjectRow struct {
+	SubjectID   int    `json:"SubjectID"`
+	SubjectName string `json:"SubjectName"`
+}
+
+type behaviourDetailPayload struct {
+	Table  []behaviourEventRow `json:"Table"`
+	Table1 []calendarRow       `json:"Table1"`
+	Table2 []struct {
+		YearName string `json:"YearName"`
+	} `json:"Table2"`
+	Table3 []subjectRow    `json:"Table3"`
+	Table4 json.RawMessage `json:"Table4"`
+}
+
+// BehaviourYear fetches the whole academic year's behaviour data in one
+// call: points, events and a subject lookup. Strongly preferred over
+// walking eventstable day by day - it's JSON rather than an HTML fragment,
+// one request instead of one per day, and the only source of the points
+// totals. Summing Adjustment reproduces the "Overall Total Points" figure
+// shown on the portal's behaviour page.
+func (c *Client) BehaviourYear() (*BehaviourYear, error) {
+	if c.session.YearID == 0 {
+		if _, err := c.LoadYearID(); err != nil {
+			return nil, err
+		}
+	}
+	empty := &BehaviourYear{Calendar: map[string]DayType{}}
+	raw, err := c.get(fmt.Sprintf(epBehaviourDetail, c.session.StudentID, c.session.YearID))
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return empty, nil
+	}
+	var payload behaviourDetailPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return empty, nil
+	}
+
+	subjects := map[int]string{}
+	for _, s := range payload.Table3 {
+		subjects[s.SubjectID] = s.SubjectName
+	}
+
+	events := make([]BehaviourEvent, 0, len(payload.Table))
+	var positive, negative int
+	for _, row := range payload.Table {
+		date, _ := time.Parse("2006-01-02T15:04:05", row.EventDate)
+		events = append(events, BehaviourEvent{
+			ID:      row.EventRecordID,
+			Date:    date,
+			Type:    row.EventType,
+			Points:  row.Adjustment,
+			Subject: subjects[row.SubjectID],
+		})
+		switch row.EventType {
+		case "Positive":
+			positive += row.Adjustment
+		case "Negative":
+			negative += row.Adjustment
+		}
+	}
+	sortEventsNewestFirst(events)
+
+	calendar := map[string]DayType{}
+	for _, row := range payload.Table1 {
+		day := row.Day
+		if len(day) > 10 {
+			day = day[:10]
+		}
+		dt, ok := dayStatus[row.DayStatusCode]
+		if !ok {
+			dt = Unknown
+		}
+		calendar[day] = dt
+	}
+
+	yearName := ""
+	if len(payload.Table2) > 0 {
+		yearName = payload.Table2[0].YearName
+	}
+	totals := firstTotalsRow(payload.Table4)
+
+	return &BehaviourYear{
+		YearName: yearName,
+		Events:   events,
+		Calendar: calendar,
+		Points: BehaviourPoints{
+			Total:           positive - absInt(negative),
+			Positive:        positive,
+			Negative:        absInt(negative),
+			AllTimeTotal:    asInt(totals["ShowTotalPointsAllTime"]),
+			AllTimePositive: asInt(totals["PositivePointsAllTime"]),
+			AllTimeNegative: asInt(totals["NegativePointsAllTime"]),
+		},
+	}, nil
+}
+
+func firstTotalsRow(raw json.RawMessage) map[string]any {
+	var rows []map[string]any
+	if err := json.Unmarshal(raw, &rows); err == nil && len(rows) > 0 {
+		return rows[0]
+	}
+	return map[string]any{}
+}
+
+// asInt parses a totals figure that arrives as a string, and is "N/A" when
+// the school hides that figure.
+func asInt(v any) *int {
+	s := strings.TrimSpace(fmt.Sprintf("%v", v))
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return nil
+	}
+	return &n
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+// Modules reports which MCAS modules this school has switched on. Schools
+// license MCAS modules individually; a command that can only ever report
+// zero because the school never enabled a module is worse than saying so
+// plainly.
+func (c *Client) Modules() (ModuleFlags, error) {
+	raw, err := c.get(epConfigurations)
+	if err != nil {
+		return ModuleFlags{}, err
+	}
+	config := map[string]string{}
+	if raw != "" {
+		var payload struct {
+			Table []struct {
+				KeyName  string `json:"KeyName"`
+				KeyValue any    `json:"KeyValue"`
+			} `json:"Table"`
+		}
+		if err := json.Unmarshal([]byte(raw), &payload); err == nil {
+			for _, row := range payload.Table {
+				config[row.KeyName] = fmt.Sprintf("%v", row.KeyValue)
+			}
+		}
+	}
+	enabled := func(key string) bool {
+		return strings.EqualFold(strings.TrimSpace(config[moduleFlags[key]]), "true")
+	}
+	return ModuleFlags{
+		Attendance: enabled("attendance"),
+		Behaviour:  enabled("behaviour"),
+		Detentions: enabled("detentions"),
+		Timetable:  enabled("timetable"),
+		Reports:    enabled("reports"),
+		Dinner:     enabled("dinner"),
+		Clubs:      enabled("clubs"),
+		Trips:      enabled("trips"),
+	}, nil
+}
+
+// Timetable parses the rendered weekly timetable grid. There is no API
+// route for this - MCSTimetable.aspx is server-rendered - so it's scraped
+// from the page.
+func (c *Client) Timetable() ([]Lesson, error) {
+	req, err := c.newRequest(http.MethodGet, c.baseURL+timetablePage, nil)
+	if err != nil {
+		return nil, &APIError{Message: err.Error()}
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, &APIError{Message: err.Error()}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, &APIError{Message: err.Error()}
+	}
+	if resp.Request != nil && resp.Request.URL != nil && strings.Contains(resp.Request.URL.String(), "MCSParentLogin") {
+		// A lapsed session bounces the page request back to the login form.
+		return nil, &AuthError{Message: "Session expired"}
+	}
+	return parseTimetableHTML(string(body), time.Now()), nil
+}
+
+func decodeTableRows(raw string) ([]map[string]any, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var payload struct {
+		Table []map[string]any `json:"Table"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, nil
+	}
+	return payload.Table, nil
+}
+
+// Reports fetches school reports published to the parent. The reference
+// integration never destructures these beyond a count, so rows are kept as
+// raw maps rather than a fixed struct until a real payload sample justifies
+// one.
+func (c *Client) Reports() ([]map[string]any, error) {
+	raw, err := c.get(fmt.Sprintf(epReports, c.session.StudentID))
+	if err != nil {
+		return nil, err
+	}
+	return decodeTableRows(raw)
+}
+
+// ClubsAndTrips fetches clubs and trips the pupil is enrolled on.
+func (c *Client) ClubsAndTrips() ([]map[string]any, error) {
+	raw, err := c.get(fmt.Sprintf(epClubs, c.session.StudentID))
+	if err != nil {
+		return nil, err
+	}
+	return decodeTableRows(raw)
+}
+
+// Detentions fetches detentions recorded for the pupil.
+func (c *Client) Detentions() ([]map[string]any, error) {
+	raw, err := c.get(fmt.Sprintf(epDetentions, c.session.StudentID))
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	var payload struct {
+		Detention []map[string]any `json:"Detention"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, nil
+	}
+	return payload.Detention, nil
+}
+
+// DinnerBalance fetches the dinner money credit balance, scraped from the
+// dashboard widget's HTML.
+func (c *Client) DinnerBalance() (*DinnerBalance, error) {
+	raw, err := c.get(fmt.Sprintf(epDinner, c.session.StudentID))
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	amount, ok := parseDinnerBalance(raw)
+	if !ok {
+		return nil, nil
+	}
+	return &DinnerBalance{Amount: amount, Currency: "GBP"}, nil
+}

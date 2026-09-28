@@ -27,6 +27,9 @@ go.work.sum
 # env file
 .env
 
+# Reference repo checked out by CI for analysis (see .github/workflows/claude.yml)
+/reference/
+
 # Editor/IDE
 # .idea/
 # .vscode/
