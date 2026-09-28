@@ -184,13 +184,15 @@ MCAS returns the whole inbox in a single call - there is no pagination to
 page through, and reading messages never marks them read on the server
 (that's a separate action this CLI never takes).
 
-Downloaded attachments are saved under
-`$XDG_CACHE_HOME/my-child-at-school-cli/attachments/<message-id>/`,
-`0o700`/`0o600` permissioned like the rest of the cache, and are treated as
-immutable: once a file exists at its deterministic path it's never
-re-downloaded, even past the normal cache TTL, unless `--force-refresh` is
-passed. Pass `-o`/`--out` to `messages attachment` to save somewhere else
-instead.
+Downloaded attachments are saved under their own name (e.g.
+`Lockdown Procedure Practice.pdf`) in the current directory, `0o600`
+permissioned, the way a browser download would be. If a file with that name
+already exists there, the next free name is used instead - `Lockdown
+Procedure Practice (1).pdf`, `(2).pdf`, and so on - so nothing already on
+disk is ever silently overwritten. Pass `-o`/`--out` to `messages attachment`
+to save somewhere else: an existing directory saves the attachment inside it
+with the same de-duplication, while any other path is treated as an exact
+file name and is always (over)written.
 
 ## Known limitations
 
