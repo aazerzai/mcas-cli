@@ -116,9 +116,11 @@ func runMessagesAttachment(cmd *cobra.Command, args []string) error {
 		destPath = filepath.Join(cacheDir, "attachments", strconv.Itoa(messageID), fmt.Sprintf("%d-%s", attachmentID, sanitizeFileName(fileName)))
 	}
 
-	// A sent attachment can't change after the fact: once it's on disk at
-	// its deterministic path, only an explicit --force-refresh re-fetches it.
-	if forceRefresh || !fileExists(destPath) {
+	// A sent attachment can't change after the fact, so once it's on disk at
+	// its deterministic auto-generated path, only an explicit --force-refresh
+	// re-fetches it. That immutability rationale doesn't hold for a
+	// user-supplied -o path, which should always be (over)written.
+	if forceRefresh || messagesAttachmentOut != "" || !fileExists(destPath) {
 		client := mcas.New(creds)
 		if err := client.Login(); err != nil {
 			return emitFailure(format, "messages attachment", classifyError(err), err)
