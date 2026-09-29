@@ -31,5 +31,12 @@ go.work.sum
 /reference/
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+
+# Synology
+.DS_Store
+
+# Build
+mcas
+
