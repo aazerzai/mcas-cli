@@ -61,7 +61,7 @@ export MCAS_PASSWORD=your-password
 go run . attendance
 ```
 
-## Commands
+## CLI Commands
 
 | Command       | Description                                                          |
 |---------------|-----------------------------------------------------------------------|
