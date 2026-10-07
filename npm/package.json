@@ -1,0 +1,26 @@
+{
+  "name": "@aazerzai/mcas-cli",
+  "version": "0.0.0",
+  "description": "Unofficial command-line client for the My Child At School (MCAS) parent portal. Not affiliated with or endorsed by My Child At School.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aazerzai/mcas-cli.git"
+  },
+  "bin": {
+    "mcas": "bin/mcas.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/install.js"
+  },
+  "files": [
+    "bin/mcas.js",
+    "scripts/install.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

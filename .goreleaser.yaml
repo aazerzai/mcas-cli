@@ -1,0 +1,26 @@
+version: 2
+
+project_name: mcas
+
+builds:
+  - main: .
+    binary: mcas
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/dental-dash/my-child-at-school-cli/cmd.version={{ .Tag }}
+
+# Ship raw binaries (no archives) so the npm postinstall can download them directly.
+archives:
+  - formats: [binary]
+    name_template: "mcas_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: aazerzai
+    name: mcas-cli
