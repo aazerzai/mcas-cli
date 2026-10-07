@@ -19,7 +19,7 @@ endorsed by or supported by** My Child At School or its owners.
 - Use at your own risk. You are responsible for complying with the portal's
   terms of service, including any rules on automated access.
 - The software is provided "as is", without warranty of any kind, as set out
-  in the [Apache 2.0 licence](LICENSE).
+  in the [MIT licence](LICENSE).
 - Your credentials are stored only in your OS keychain (or read from flags /
   environment variables you supply) and are never sent anywhere except the
   MCAS portal.
@@ -265,3 +265,10 @@ go test ./...
 
 Contributing: never commit real pupil data or credentials in issues, tests or
 fixtures - use made-up data only.
+
+## License
+
+This project is released under the [MIT licence](LICENSE). It is a Go port of
+[ha-mychildatschool-mcas](https://github.com/robbrad/ha-mychildatschool-mcas)
+by Robert Bradley (also MIT), whose copyright notice is retained in
+[`LICENSE`](LICENSE).
