@@ -27,23 +27,17 @@ const TARGETS = [
   { os: "win32", cpu: "arm64", goos: "windows", goarch: "arm64" },
 ];
 
-function find(dir, name) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      const hit = find(p, name);
-      if (hit) return hit;
-    } else if (e.name === name) {
-      return p;
-    }
-  }
-  return null;
+// GoReleaser records every built binary in dist/artifacts.json.
+const artifacts = JSON.parse(fs.readFileSync(path.join(dist, "artifacts.json"), "utf8"));
+function find(goos, goarch) {
+  const hit = artifacts.find((a) => a.type === "Binary" && a.goos === goos && a.goarch === goarch);
+  return hit && path.resolve(__dirname, "..", "..", hit.path);
 }
 
 const optionalDependencies = {};
 for (const t of TARGETS) {
   const ext = t.os === "win32" ? ".exe" : "";
-  const src = find(dist, `mcas_${t.goos}_${t.goarch}${ext}`);
+  const src = find(t.goos, t.goarch);
   if (!src) throw new Error(`binary for ${t.goos}/${t.goarch} not found in ${dist}`);
 
   const name = `${main.name}-${t.os}-${t.cpu}`;
