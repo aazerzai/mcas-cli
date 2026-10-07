@@ -10,17 +10,21 @@
   "bin": {
     "mcas": "bin/mcas.js"
   },
-  "scripts": {
-    "postinstall": "node scripts/install.js"
-  },
   "files": [
-    "bin/mcas.js",
-    "scripts/install.js"
+    "bin/mcas.js"
   ],
   "engines": {
     "node": ">=18"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "optionalDependencies": {
+    "@aazerzai/mcas-cli-darwin-arm64": "0.0.0",
+    "@aazerzai/mcas-cli-darwin-x64": "0.0.0",
+    "@aazerzai/mcas-cli-linux-x64": "0.0.0",
+    "@aazerzai/mcas-cli-linux-arm64": "0.0.0",
+    "@aazerzai/mcas-cli-win32-x64": "0.0.0",
+    "@aazerzai/mcas-cli-win32-arm64": "0.0.0"
   }
 }
