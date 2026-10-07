@@ -34,7 +34,35 @@ by Robert Bradley, which is released under the MIT licence (copyright (c) 2026
 Robert Bradley). A copy of its licence is kept in
 [`reference/ha-mychildatschool-mcas/LICENSE`](reference/ha-mychildatschool-mcas/LICENSE).
 
-## Prerequisites
+## Install
+
+```sh
+npm install -g @aazerzai/mcas-cli
+# or, for one-off use:
+npx @aazerzai/mcas-cli
+```
+
+Verify the install:
+
+```sh
+mcas --version
+```
+
+## Uninstall
+
+First remove the credentials stored in your OS keychain by `mcas login`:
+
+```sh
+mcas logout
+```
+
+Then remove the package:
+
+```sh
+npm uninstall -g @aazerzai/mcas-cli
+```
+
+## Prerequisites (building from source)
 
 - Go 1.23 or later
 - An MCAS parent account (email + password) with an active pupil
@@ -265,6 +293,26 @@ go test ./...
 
 Contributing: never commit real pupil data or credentials in issues, tests or
 fixtures - use made-up data only.
+
+### Releasing
+
+Pushing a tag of the form `vX.Y.Z` (for example `v1.2.3`) runs the release
+workflow: GoReleaser builds binaries for darwin/linux/windows (amd64, arm64) and
+attaches them to the GitHub Release, then the `npm/` package is published as
+`@aazerzai/mcas-cli` with the version taken from the tag (without the `v`).
+Tags that aren't `vX.Y.Z` fail and do not publish.
+
+Maintainer setup:
+
+- An npm account that owns the `@aazerzai` scope, with 2FA enabled
+  (Authorization and Publishing).
+- A repository secret `NPM_TOKEN`: a granular token with read/write on
+  `@aazerzai` that can publish from CI without a one-time code. Note its expiry
+  date and renew it before it lapses.
+- First release: `git tag v0.1.0 && git push origin v0.1.0`.
+- Optionally switch to npm trusted publishing afterwards and drop the token.
+
+Dry run before the first tag: `cd npm && npm pack --dry-run`.
 
 ## License
 

@@ -15,8 +15,12 @@ var (
 	flagPassword string
 )
 
+// version is stamped at release time via -ldflags "-X <module>/cmd.version=<tag>".
+var version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:           "mcas",
+	Version:       version,
 	Short:         "Query My Child At School (MCAS) from the command line",
 	SilenceUsage:  true,
 	SilenceErrors: true,
