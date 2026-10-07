@@ -6,6 +6,34 @@ A command-line client for the [My Child At School](https://www.mychildatschool.c
 Home Assistant integration. It supports a single pupil per login, matching
 that reference integration's scope.
 
+## Disclaimer
+
+This is an **unofficial, independent project**. It is **not affiliated with,
+endorsed by or supported by** My Child At School or its owners.
+
+- "My Child At School" and "MCAS" are trademarks of their respective owners
+  and are used here only to describe compatibility.
+- There is no official MCAS API. The CLI signs in to the parent portal with
+  your own credentials and reads data the way a browser would. The portal may
+  change or block access at any time, which may break this tool.
+- Use at your own risk. You are responsible for complying with the portal's
+  terms of service, including any rules on automated access.
+- The software is provided "as is", without warranty of any kind, as set out
+  in the [Apache 2.0 licence](LICENSE).
+- Your credentials are stored only in your OS keychain (or read from flags /
+  environment variables you supply) and are never sent anywhere except the
+  MCAS portal.
+
+Please don't include real pupil data or credentials in issues, tests, fixtures
+or pull requests. Redact or invent values instead.
+
+## Attribution
+
+Ported from [ha-mychildatschool-mcas](https://github.com/robbrad/ha-mychildatschool-mcas)
+by Robert Bradley, which is released under the MIT licence (copyright (c) 2026
+Robert Bradley). A copy of its licence is kept in
+[`reference/ha-mychildatschool-mcas/LICENSE`](reference/ha-mychildatschool-mcas/LICENSE).
+
 ## Prerequisites
 
 - Go 1.23 or later
@@ -234,3 +262,6 @@ go build ./...
 go vet ./...
 go test ./...
 ```
+
+Contributing: never commit real pupil data or credentials in issues, tests or
+fixtures - use made-up data only.
