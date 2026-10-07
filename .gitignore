@@ -41,5 +41,5 @@ go.work.sum
 mcas
 
 
-# npm wrapper: binary downloaded by postinstall
-npm/bin/mcas-bin*
+# npm platform packages generated at release time
+npm/platforms/

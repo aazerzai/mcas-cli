@@ -1,16 +1,21 @@
 #!/usr/bin/env node
-// Thin wrapper that runs the binary fetched by scripts/install.js.
+// Thin wrapper that runs the platform-specific mcas binary, which npm installs
+// from the matching optional dependency.
 "use strict";
 
 const { spawnSync } = require("child_process");
-const fs = require("fs");
-const path = require("path");
 
+const pkg = `@aazerzai/mcas-cli-${process.platform}-${process.arch}`;
 const ext = process.platform === "win32" ? ".exe" : "";
-const bin = path.join(__dirname, `mcas-bin${ext}`);
 
-if (!fs.existsSync(bin)) {
-  console.error("mcas binary not found; try reinstalling @aazerzai/mcas-cli");
+let bin;
+try {
+  bin = require.resolve(`${pkg}/bin/mcas${ext}`);
+} catch {
+  console.error(
+    `mcas: no binary package for ${process.platform}/${process.arch} (${pkg}).\n` +
+      "Reinstall without --no-optional / --omit=optional, or check that your platform is supported.",
+  );
   process.exit(1);
 }
 
